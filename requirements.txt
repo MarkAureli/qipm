@@ -1,0 +1,2 @@
+# Add project dependencies here, one per line.
+# Example: requests==2.31.0

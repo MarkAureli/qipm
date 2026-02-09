@@ -3,24 +3,10 @@
 
 from __future__ import annotations
 
-import json
 import warnings
 from pathlib import Path
 
 import highspy
-
-# #region agent log
-_DEBUG_LOG = Path(__file__).resolve().parent / ".cursor" / "debug.log"
-def _dlog(msg: str, data: dict, hypothesis_id: str = "") -> None:
-    try:
-        payload = {"message": msg, "data": data, "timestamp": __import__("time").time()}
-        if hypothesis_id:
-            payload["hypothesisId"] = hypothesis_id
-        with open(_DEBUG_LOG, "a") as f:
-            f.write(json.dumps(payload) + "\n")
-    except Exception:
-        pass
-# #endregion
 from tqdm import tqdm
 import numpy as np
 from scipy.sparse import csr_matrix
@@ -213,42 +199,24 @@ def transform_instance(filepath: str | Path) -> None:
     - A_data, A_indices, A_indptr, A_shape: constraint matrix in CSR sparse format
     """
     path = Path(filepath).resolve()
-    # #region agent log
-    _dlog("transform_instance entry", {"path": str(path), "name": path.name}, "D")
-    # #endregion
     if not path.is_file():
         raise FileNotFoundError(f"MPS file not found: {path}")
     if path.stat().st_size == 0:
-        # #region agent log
-        _dlog("skip empty file", {"path": str(path), "name": path.name}, "A")
-        # #endregion
         warnings.warn(f"Skipping empty file: {path}", stacklevel=2)
         return
 
     h = highspy.Highs()
     h.setOptionValue("log_to_console", False)
     status = h.readModel(str(path))
-    # #region agent log
-    _dlog("readModel returned", {"path": str(path), "status": str(status)}, "A")
-    # #endregion
     if status == highspy.HighsStatus.kWarning:
         warnings.warn(f"HiGHS readModel returned kWarning for {path}", stacklevel=2)
     elif status != highspy.HighsStatus.kOk:
-        # #region agent log
-        _dlog("readModel non-ok raise", {"path": str(path), "status": str(status)}, "A")
-        # #endregion
         raise RuntimeError(f"HiGHS readModel failed: {status}")
 
     status = h.presolve()
-    # #region agent log
-    _dlog("presolve returned", {"path": str(path), "status": str(status)}, "B")
-    # #endregion
     if status == highspy.HighsStatus.kWarning:
         warnings.warn(f"HiGHS presolve returned kWarning for {path}", stacklevel=2)
     elif status != highspy.HighsStatus.kOk:
-        # #region agent log
-        _dlog("presolve non-ok raise", {"path": str(path), "status": str(status)}, "B")
-        # #endregion
         raise RuntimeError(f"HiGHS presolve failed: {status}")
 
     # After presolve(), the incumbent model in HiGHS is the presolved LP.
@@ -293,10 +261,7 @@ def transform_instance_class(
         raise FileNotFoundError(f"Instance class folder not found: {folder}")
 
     mps_paths = sorted(folder.glob("*.mps"))
-    for idx, mps_path in enumerate(tqdm(mps_paths, desc=instance_class, unit="instance")):
-        # #region agent log
-        _dlog("instance_class iteration", {"instance_class": instance_class, "index_0": idx, "index_1": idx + 1, "path": str(mps_path), "name": mps_path.name}, "D")
-        # #endregion
+    for mps_path in tqdm(mps_paths, desc=instance_class, unit="instance"):
         transform_instance(mps_path)
 
 

@@ -53,14 +53,20 @@ def _solve_npz(path: Path) -> float:
     row_lower = b.copy()
     row_upper = b.copy()
     num_nz = int(A.nnz)
-    starts = np.asarray(A.indptr[:-1], dtype=np.int64) if m > 0 else np.array([], dtype=np.int64)
-    h.addRows(m, row_lower, row_upper, num_nz, starts, A.indices.astype(np.int64), A.data.astype(np.float64))
+    starts = np.asarray(A.indptr[:-1], dtype=np.int32) if m > 0 else np.array([], dtype=np.int32)
+    h.addRows(m, row_lower, row_upper, num_nz, starts, A.indices.astype(np.int32), A.data.astype(np.float64))
 
     t0 = time.perf_counter()
     status = h.run()
     elapsed = time.perf_counter() - t0
     if status != highspy.HighsStatus.kOk and status != highspy.HighsStatus.kWarning:
-        raise RuntimeError(f"HiGHS solve failed: {status}")
+        # Retry with IPM when default solver fails (e.g. badly scaled RHS); IPM often handles scaling better
+        h.setOptionValue("solver", "ipm")
+        t0 = time.perf_counter()
+        status = h.run()
+        elapsed = time.perf_counter() - t0
+        if status != highspy.HighsStatus.kOk and status != highspy.HighsStatus.kWarning:
+            raise RuntimeError(f"HiGHS solve failed: {status}")
     return elapsed
 
 

@@ -15,9 +15,10 @@ dist/
 *.egg-info/
 *.egg
 
-# IDE
+# IDE / editor
 .idea/
 .vscode/
+.cursor/
 *.swp
 *.swo
 
@@ -29,6 +30,7 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+tests/fixtures/*.npz
 
 # Local / secrets
 *.local

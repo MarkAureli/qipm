@@ -165,6 +165,9 @@ def extract(clone_path: Path, cache_path: Path) -> None:
         if zip_path.exists():
             _copy_zip_mps_by_filename(zip_path, cache_path)
 
+    # External repo has an empty/broken entry; remove it so transform does not fail.
+    (cache_path / "stochlp" / "stoprobs.zip.mps").unlink(missing_ok=True)
+
     _write_time_files_from_evaluation(clone_path, cache_path)
 
 

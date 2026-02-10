@@ -1,5 +1,7 @@
 # Transform test fixtures (MPS → presolve → standard form)
 
+Each `.mps` file has a pre-created reference `.npz` (standard form c, b, A). Tests compare `transform_instance` output to these references; do not regenerate them with a script.
+
 | Fixture        | Purpose |
 |----------------|--------|
 | **min_sum**    | ≤ row (L), two vars with lower bound 0 → slack in standard form |

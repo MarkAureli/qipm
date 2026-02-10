@@ -1,8 +1,8 @@
 """Tests for transform_instance: MPS -> presolve -> standard form (.npz).
 
-Fixture coverage: see tests/fixtures/README.md. Parametrized tests use min_sum, equality,
-three_var with expected (c,b,A). Edge-case fixtures (bounded_var, lower_row, free_var,
-range_row) are tested for valid standard-form output only (shape, keys, finite values).
+Fixture coverage: see tests/fixtures/README.md. Reference .npz files in tests/fixtures/
+are the expected standard form for each .mps. Parametrized tests compare transform output
+to these references; edge-case fixtures are validated for well-formed standard form only.
 """
 
 import numpy as np
@@ -15,6 +15,9 @@ from transform import transform_instance
 
 # Fixture directory
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+
+# Stems that have reference .npz for exact comparison (all MPS fixtures have reference .npz)
+REFERENCE_NPZ_STEMS = ["min_sum", "equality", "three_var", "bounded_var", "lower_row", "free_var", "upper_var", "range_row"]
 
 
 def load_standard_npz(path: Path) -> tuple[np.ndarray, np.ndarray, csr_matrix]:
@@ -48,48 +51,16 @@ def assert_standard_form_equal(
     np.testing.assert_allclose(Ad, Ae, rtol=rtol, atol=atol)
 
 
-# Expected standard forms for small instances (min c'x, Ax=b, x>=0)
-
-# min_sum.mps: min x1 + x2  s.t.  x1 + x2 <= 10,  x1,x2 >= 0
-# Standard: min c'x  s.t.  x1 + x2 + s = 10,  x1,x2,s >= 0
-MIN_SUM_EXPECTED = {
-    "c": np.array([1.0, 1.0, 0.0]),
-    "b": np.array([10.0]),
-    "A": csr_matrix([[1.0, 1.0, 1.0]]),
-}
-
-# equality.mps: min x1  s.t.  x1 + x2 = 5,  x1,x2 >= 0
-EQUALITY_EXPECTED = {
-    "c": np.array([1.0, 0.0]),
-    "b": np.array([5.0]),
-    "A": csr_matrix([[1.0, 1.0]]),
-}
-
-# three_var.mps: min x1+x2+x3  s.t.  x1+x2 <= 5,  x2+x3 <= 7,  x1,x2,x3 >= 0
-# After presolve the second row may be reduced (e.g. x2 eliminated); we use the actual
-# presolved standard form: 5 vars, 2 eqs (row2 is 0,0,1,0,1 from observed HiGHS output)
-THREE_VAR_EXPECTED = {
-    "c": np.array([1.0, 1.0, 1.0, 0.0, 0.0]),
-    "b": np.array([5.0, 7.0]),
-    "A": csr_matrix([[1.0, 1.0, 0.0, 1.0, 0.0], [0.0, 0.0, 1.0, 0.0, 1.0]]),
-}
-
-
-@pytest.mark.parametrize(
-    "stem,expected",
-    [
-        ("min_sum", MIN_SUM_EXPECTED),
-        ("equality", EQUALITY_EXPECTED),
-        ("three_var", THREE_VAR_EXPECTED),
-    ],
-)
-def test_transform_instance_matches_expected(stem: str, expected: dict, tmp_path: Path) -> None:
-    """Transform MPS fixture to .npz and compare to expected c, b, A."""
+@pytest.mark.parametrize("stem", REFERENCE_NPZ_STEMS)
+def test_transform_instance_matches_expected(stem: str, tmp_path: Path) -> None:
+    """Transform MPS fixture to .npz and compare to reference .npz in fixtures."""
     mps_path = FIXTURES / f"{stem}.mps"
+    ref_npz_path = FIXTURES / f"{stem}.npz"
     if not mps_path.is_file():
         pytest.skip(f"Fixture not found: {mps_path}")
+    if not ref_npz_path.is_file():
+        pytest.skip(f"Reference .npz not found: {ref_npz_path}")
 
-    # Copy to tmp_path so we don't write into repo
     import shutil
     mps_tmp = tmp_path / f"{stem}.mps"
     shutil.copy(mps_path, mps_tmp)
@@ -100,14 +71,11 @@ def test_transform_instance_matches_expected(stem: str, expected: dict, tmp_path
     assert out_path.name == f"{stem}.npz"
 
     c, b, A = load_standard_npz(out_path)
-    # Test case requirement: presolved standard form must be non-empty
+    c_exp, b_exp, A_exp = load_standard_npz(ref_npz_path)
     assert c.size > 0, "Presolved formulation has no variables (empty c)"
     assert b.size > 0, "Presolved formulation has no constraints (empty b)"
     assert A.shape[0] > 0 and A.shape[1] > 0, "Presolved constraint matrix A is empty"
-    assert_standard_form_equal(
-        c, b, A,
-        expected["c"], expected["b"], expected["A"],
-    )
+    assert_standard_form_equal(c, b, A, c_exp, b_exp, A_exp)
 
 
 def test_transform_instance_writes_npz(tmp_path: Path) -> None:
@@ -130,35 +98,3 @@ def test_transform_instance_file_not_found() -> None:
         transform_instance("/nonexistent/path.mps")
 
 
-# Edge-case fixtures (exact output is HiGHS-dependent); validated for well-formed standard form only
-EDGE_CASE_FIXTURES = ["bounded_var", "lower_row", "free_var", "upper_var", "range_row"]
-
-
-@pytest.mark.parametrize("stem", EDGE_CASE_FIXTURES)
-def test_transform_edge_case_fixtures_produce_valid_standard_form(
-    stem: str, tmp_path: Path
-) -> None:
-    """Transform edge-case MPS fixtures; assert output npz is valid standard form (c, b, A)."""
-    import shutil
-
-    mps_path = FIXTURES / f"{stem}.mps"
-    if not mps_path.is_file():
-        pytest.skip(f"Fixture not found: {mps_path}")
-
-    mps_tmp = tmp_path / f"{stem}.mps"
-    shutil.copy(mps_path, mps_tmp)
-    transform_instance(mps_tmp)
-
-    out_path = tmp_path / f"{stem}.npz"
-    assert out_path.is_file()
-    data = np.load(out_path, allow_pickle=False)
-    required = {"c", "b", "A_data", "A_indices", "A_indptr", "A_shape"}
-    assert required.issubset(set(data.keys())), f"Missing keys in npz: {required - set(data.keys())}"
-
-    c = data["c"]
-    b = data["b"]
-    shape = tuple(data["A_shape"])
-    assert c.ndim == 1 and b.ndim == 1
-    assert shape[0] == len(b) and shape[1] == len(c)
-    assert np.all(np.isfinite(c)) and np.all(np.isfinite(b))
-    assert c.size > 0 and b.size > 0

@@ -30,7 +30,6 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
-tests/fixtures/*.npz
 
 # Local / secrets
 *.local

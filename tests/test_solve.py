@@ -1,7 +1,6 @@
-"""Tests for solve_instance: MPS or .npz LP, solve with HiGHS, write .mps_time or .std_time.
+"""Tests for solve_instance: MPS or .std LP, solve with HiGHS, write .mps_time or .std_time.
 
-Instance-level tests only. Solving .mps and solving .npz are tested separately.
-Uses the same fixture stems as test_transform; reference .npz files are used for NPZ tests.
+Uses the same fixture stems as test_transform; reference .std files are used for standard-form tests.
 """
 
 import shutil
@@ -27,18 +26,18 @@ SOLVE_FIXTURE_STEMS = [
 
 
 @pytest.mark.parametrize("stem", SOLVE_FIXTURE_STEMS)
-def test_solve_instance_npz_completes_and_writes_std_time(stem: str, tmp_path: Path) -> None:
-    """Solve .npz instance; assert no error and .std_time written with valid time."""
-    npz_path = FIXTURES / f"{stem}.npz"
-    if not npz_path.is_file():
-        pytest.skip(f"Fixture not found: {npz_path}")
+def test_solve_instance_std_completes_and_writes_std_time(stem: str, tmp_path: Path) -> None:
+    """Solve .std instance; assert no error and .std_time written with valid time."""
+    std_path = FIXTURES / f"{stem}.std"
+    if not std_path.is_file():
+        pytest.skip(f"Fixture not found: {std_path}")
 
-    npz_tmp = tmp_path / f"{stem}.npz"
-    shutil.copy(npz_path, npz_tmp)
-    solve_instance(npz_tmp)
+    std_tmp = tmp_path / f"{stem}.std"
+    shutil.copy(std_path, std_tmp)
+    solve_instance(std_tmp)
 
     std_time_path = tmp_path / f"{stem}.std_time"
-    assert std_time_path.is_file(), "solve_instance should write .std_time for .npz"
+    assert std_time_path.is_file(), "solve_instance should write .std_time for .std"
     elapsed = float(std_time_path.read_text().strip())
     assert elapsed >= 0.0, "Solve time should be non-negative"
 
@@ -63,7 +62,7 @@ def test_solve_instance_mps_completes_and_writes_mps_time(stem: str, tmp_path: P
 def test_solve_instance_file_not_found() -> None:
     """solve_instance raises FileNotFoundError for missing file."""
     with pytest.raises(FileNotFoundError, match="not found"):
-        solve_instance("/nonexistent/path.npz")
+        solve_instance("/nonexistent/path.std")
 
 
 def test_solve_instance_unsupported_format(tmp_path: Path) -> None:

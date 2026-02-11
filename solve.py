@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Solve LP instances (MPS or standard-form .npz) with HiGHS and record solve time."""
+"""Solve LP instances (MPS or standard-form .std) with HiGHS and record solve time."""
 
 from __future__ import annotations
 
@@ -32,8 +32,8 @@ def _solve_mps(path: Path) -> float:
     return elapsed
 
 
-def _solve_npz(path: Path) -> float:
-    """Load .npz standard-form LP, build HiGHS model, run solver. Return solve time in seconds."""
+def _solve_std(path: Path) -> float:
+    """Load .std standard-form LP, build HiGHS model, run solver. Return solve time in seconds."""
     data = np.load(path)
     c = np.asarray(data["c"], dtype=np.float64).ravel()
     b = np.asarray(data["b"], dtype=np.float64).ravel()
@@ -75,8 +75,8 @@ def solve_instance(filepath: str | Path) -> None:
 
     - If filepath is .mps: read into HiGHS and solve directly (no transformation).
       Writes solve time to the same path with extension .mps_time (e.g. instance.mps -> instance.mps_time).
-    - If filepath is .npz: load standard form (c, b, A), build HiGHS model, solve.
-      Writes solve time to the same path with extension .std_time (e.g. instance.npz -> instance.std_time).
+    - If filepath is .std: load standard form (c, b, A), build HiGHS model, solve.
+      Writes solve time to the same path with extension .std_time (e.g. instance.std -> instance.std_time).
 
     Raises FileNotFoundError if the file does not exist, ValueError for unsupported extension.
     """
@@ -88,11 +88,11 @@ def solve_instance(filepath: str | Path) -> None:
     if suffix == ".mps":
         elapsed = _solve_mps(path)
         out_path = path.with_suffix(".mps_time")
-    elif suffix == ".npz":
-        elapsed = _solve_npz(path)
+    elif suffix == ".std":
+        elapsed = _solve_std(path)
         out_path = path.with_suffix(".std_time")
     else:
-        raise ValueError(f"Unsupported instance format: {suffix}. Use .mps or .npz.")
+        raise ValueError(f"Unsupported instance format: {suffix}. Use .mps or .std.")
 
     out_path.write_text(f"{elapsed}\n")
 
@@ -106,10 +106,10 @@ def solve_instance_class(
 
     instance_class: name of the subfolder (e.g. "netlib", "miplib", "clique").
     cache_dir: directory containing instance-class subfolders; defaults to "cache_dir" in the current directory.
-    formats: "mps" | "npz" | "both" — which instance formats to solve (default "both").
+    formats: "mps" | "std" | "both" — which instance formats to solve (default "both").
     """
-    if formats not in ("mps", "npz", "both"):
-        raise ValueError(f"formats must be 'mps', 'npz', or 'both'; got {formats!r}")
+    if formats not in ("mps", "std", "both"):
+        raise ValueError(f"formats must be 'mps', 'std', or 'both'; got {formats!r}")
 
     root = Path(cache_dir).resolve() if cache_dir is not None else Path("cache_dir").resolve()
     folder = root / instance_class
@@ -119,8 +119,8 @@ def solve_instance_class(
     paths: list[Path] = []
     if formats in ("mps", "both"):
         paths.extend(sorted(folder.glob("*.mps")))
-    if formats in ("npz", "both"):
-        paths.extend(sorted(folder.glob("*.npz")))
+    if formats in ("std", "both"):
+        paths.extend(sorted(folder.glob("*.std")))
     for p in tqdm(paths, desc=instance_class, unit="instance"):
         solve_instance(p)
 
@@ -135,7 +135,7 @@ def solve_all_instance_classes(
     instance_classes: optional list of instance class names (subfolder names under cache_dir).
         If None, all instance classes (all subdirectories of cache_dir) are processed.
     cache_dir: directory containing instance-class subfolders; defaults to "cache_dir" in the current directory.
-    formats: "mps" | "npz" | "both" — which instance formats to solve (default "both").
+    formats: "mps" | "std" | "both" — which instance formats to solve (default "both").
     """
     root = Path(cache_dir).resolve() if cache_dir is not None else Path("cache_dir").resolve()
     if not root.is_dir():
@@ -165,9 +165,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--formats",
-        choices=("mps", "npz", "both"),
+        choices=("mps", "std", "both"),
         default="both",
-        help="Instance formats to solve: mps, npz, or both (default: both).",
+        help="Instance formats to solve: mps, std, or both (default: both).",
     )
     args = parser.parse_args()
     solve_all_instance_classes(

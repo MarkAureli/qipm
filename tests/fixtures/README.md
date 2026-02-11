@@ -1,6 +1,6 @@
 # Transform test fixtures (MPS → presolve → standard form)
 
-Each `.mps` file has a pre-created reference `.npz` (standard form c, b, A). Tests compare `transform_instance` output to these references; do not regenerate them with a script.
+Each `.mps` file has a pre-created reference `.std` (standard form c, b, A). Tests compare `transform_instance` output to these references.
 
 | Fixture        | Purpose |
 |----------------|--------|

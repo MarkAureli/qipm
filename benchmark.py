@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark LP instances (standard-form .npz): compute gate counts for qipm1/2/3 and write to .qipm1/.qipm2/.qipm3."""
+"""Benchmark LP instances (standard-form .std): compute gate counts for qipm1/2/3 and write to .qipm1/.qipm2/.qipm3."""
 
 from __future__ import annotations
 
@@ -28,8 +28,8 @@ def _gate_count_qipm3(A: csr_matrix, b: np.ndarray, c: np.ndarray) -> int:
 _GATE_COUNT_FUNCS = {1: _gate_count_qipm1, 2: _gate_count_qipm2, 3: _gate_count_qipm3}
 
 
-def _load_standard_form_npz(path: Path) -> tuple[csr_matrix, np.ndarray, np.ndarray]:
-    """Load (A, b, c) from .npz standard-form LP. A returned as CSR."""
+def _load_standard_form(path: Path) -> tuple[csr_matrix, np.ndarray, np.ndarray]:
+    """Load (A, b, c) from .std standard-form LP. A returned as CSR."""
     data = np.load(path)
     c = np.asarray(data["c"], dtype=np.float64).ravel()
     b = np.asarray(data["b"], dtype=np.float64).ravel()
@@ -46,9 +46,9 @@ def benchmark_instance(
     filepath: str | Path,
     qipm_numbers: list[int] | None = None,
 ) -> None:
-    """Load standard-form LP from .npz, compute gate counts for requested qipm(s), write to .qipm1/.qipm2/.qipm3.
+    """Load standard-form LP from .std, compute gate counts for requested qipm(s), write to .qipm1/.qipm2/.qipm3.
 
-    filepath: path to a .npz instance file.
+    filepath: path to a .std instance file.
     qipm_numbers: which qipm variants to run (1, 2, 3). If None or empty, all three are run.
 
     Writes one number (plain text) per file: instance.qipm1, instance.qipm2, instance.qipm3.
@@ -56,8 +56,8 @@ def benchmark_instance(
     path = Path(filepath).resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Instance file not found: {path}")
-    if path.suffix.lower() != ".npz":
-        raise ValueError(f"Only .npz instances are supported; got {path.suffix!r}")
+    if path.suffix.lower() != ".std":
+        raise ValueError(f"Only .std instances are supported; got {path.suffix!r}")
 
     numbers = qipm_numbers if qipm_numbers else [1, 2, 3]
     if not numbers:
@@ -66,7 +66,7 @@ def benchmark_instance(
         if n not in (1, 2, 3):
             raise ValueError(f"qipm_numbers must contain only 1, 2, or 3; got {n}")
 
-    A, b, c = _load_standard_form_npz(path)
+    A, b, c = _load_standard_form(path)
     for n in numbers:
         count = _GATE_COUNT_FUNCS[n](A, b, c)
         out_path = path.with_suffix(f".qipm{n}")
@@ -78,7 +78,7 @@ def benchmark_instance_class(
     qipm_numbers: list[int] | None = None,
     cache_dir: str | Path | None = None,
 ) -> None:
-    """Run gate-count benchmark for all .npz instances in the given instance-class subfolder of cache_dir.
+    """Run gate-count benchmark for all .std instances in the given instance-class subfolder of cache_dir.
 
     instance_class: name of the subfolder (e.g. "netlib", "miplib").
     qipm_numbers: which qipm variants (1, 2, 3). If None, all three are run.
@@ -89,9 +89,9 @@ def benchmark_instance_class(
     if not folder.is_dir():
         raise FileNotFoundError(f"Instance class folder not found: {folder}")
 
-    npz_paths = sorted(folder.glob("*.npz"))
-    for npz_path in tqdm(npz_paths, desc=instance_class, unit="instance"):
-        benchmark_instance(npz_path, qipm_numbers=qipm_numbers)
+    paths = sorted(folder.glob("*.std"))
+    for p in tqdm(paths, desc=instance_class, unit="instance"):
+        benchmark_instance(p, qipm_numbers=qipm_numbers)
 
 
 def benchmark_all_instance_classes(
@@ -99,7 +99,7 @@ def benchmark_all_instance_classes(
     qipm_numbers: list[int] | None = None,
     cache_dir: str | Path | None = None,
 ) -> None:
-    """Run gate-count benchmark for .npz instances (main entry point).
+    """Run gate-count benchmark for .std instances (main entry point).
 
     instance_classes: optional list of instance class names (subfolder names under cache_dir).
         If None, all instance classes (all subdirectories of cache_dir) are processed.
@@ -121,7 +121,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Benchmark .npz LP instances: compute qipm gate counts and write to .qipm1/.qipm2/.qipm3.",
+        description="Benchmark .std LP instances: compute qipm gate counts and write to .qipm1/.qipm2/.qipm3.",
     )
     parser.add_argument(
         "instance_classes",

@@ -1,6 +1,6 @@
-"""Tests for transform_instance: MPS -> presolve -> standard form (.npz).
+"""Tests for transform_instance: MPS -> presolve -> standard form (.std).
 
-Fixture coverage: see tests/fixtures/README.md. Reference .npz files in tests/fixtures/
+Fixture coverage: see tests/fixtures/README.md. Reference .std files in tests/fixtures/
 are the expected standard form for each .mps. Parametrized tests compare transform output
 to these references; edge-case fixtures are validated for well-formed standard form only.
 """
@@ -16,12 +16,12 @@ from transform import transform_instance
 # Fixture directory
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
-# Stems that have reference .npz for exact comparison (all MPS fixtures have reference .npz)
-REFERENCE_NPZ_STEMS = ["min_sum", "equality", "three_var", "bounded_var", "lower_row", "free_var", "upper_var", "range_row"]
+# Stems that have reference .std for exact comparison (all MPS fixtures have reference .std)
+REFERENCE_STD_STEMS = ["min_sum", "equality", "three_var", "bounded_var", "lower_row", "free_var", "upper_var", "range_row"]
 
 
-def load_standard_npz(path: Path) -> tuple[np.ndarray, np.ndarray, csr_matrix]:
-    """Load c, b, A from our .npz format (A in CSR via data/indices/indptr/shape)."""
+def load_standard_std(path: Path) -> tuple[np.ndarray, np.ndarray, csr_matrix]:
+    """Load c, b, A from our .std format (A in CSR via data/indices/indptr/shape)."""
     data = np.load(path, allow_pickle=False)
     c = data["c"]
     b = data["b"]
@@ -51,35 +51,35 @@ def assert_standard_form_equal(
     np.testing.assert_allclose(Ad, Ae, rtol=rtol, atol=atol)
 
 
-@pytest.mark.parametrize("stem", REFERENCE_NPZ_STEMS)
+@pytest.mark.parametrize("stem", REFERENCE_STD_STEMS)
 def test_transform_instance_matches_expected(stem: str, tmp_path: Path) -> None:
-    """Transform MPS fixture to .npz and compare to reference .npz in fixtures."""
+    """Transform MPS fixture to .std and compare to reference .std in fixtures."""
     mps_path = FIXTURES / f"{stem}.mps"
-    ref_npz_path = FIXTURES / f"{stem}.npz"
+    ref_std_path = FIXTURES / f"{stem}.std"
     if not mps_path.is_file():
         pytest.skip(f"Fixture not found: {mps_path}")
-    if not ref_npz_path.is_file():
-        pytest.skip(f"Reference .npz not found: {ref_npz_path}")
+    if not ref_std_path.is_file():
+        pytest.skip(f"Reference .std not found: {ref_std_path}")
 
     import shutil
     mps_tmp = tmp_path / f"{stem}.mps"
     shutil.copy(mps_path, mps_tmp)
 
     transform_instance(mps_tmp)
-    out_path = tmp_path / f"{stem}.npz"
-    assert out_path.suffix == ".npz"
-    assert out_path.name == f"{stem}.npz"
+    out_path = tmp_path / f"{stem}.std"
+    assert out_path.suffix == ".std"
+    assert out_path.name == f"{stem}.std"
 
-    c, b, A = load_standard_npz(out_path)
-    c_exp, b_exp, A_exp = load_standard_npz(ref_npz_path)
+    c, b, A = load_standard_std(out_path)
+    c_exp, b_exp, A_exp = load_standard_std(ref_std_path)
     assert c.size > 0, "Presolved formulation has no variables (empty c)"
     assert b.size > 0, "Presolved formulation has no constraints (empty b)"
     assert A.shape[0] > 0 and A.shape[1] > 0, "Presolved constraint matrix A is empty"
     assert_standard_form_equal(c, b, A, c_exp, b_exp, A_exp)
 
 
-def test_transform_instance_writes_npz(tmp_path: Path) -> None:
-    """transform_instance writes .npz file next to the MPS file."""
+def test_transform_instance_writes_std(tmp_path: Path) -> None:
+    """transform_instance writes .std file next to the MPS file."""
     mps_path = FIXTURES / "equality.mps"
     if not mps_path.is_file():
         pytest.skip("Fixture equality.mps not found")
@@ -88,7 +88,7 @@ def test_transform_instance_writes_npz(tmp_path: Path) -> None:
     shutil.copy(mps_path, mps_tmp)
 
     transform_instance(mps_tmp)
-    out = tmp_path / "equality.npz"
+    out = tmp_path / "equality.std"
     assert out.is_file()
 
 

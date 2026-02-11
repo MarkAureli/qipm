@@ -193,10 +193,11 @@ def transform_instance(filepath: str | Path) -> None:
     """Read MPS file, presolve with HiGHS, convert to standard form, and save result.
 
     Standard form: min c'x  s.t.  Ax = b,  x >= 0.
-    Saves to the same path with extension replaced by .npz, containing:
+    Saves to the same path with extension replaced by .std, containing:
     - c: objective vector (np.ndarray)
     - b: RHS vector (np.ndarray)
     - A_data, A_indices, A_indptr, A_shape: constraint matrix in CSR sparse format
+    (NumPy savez_compressed format; written via .npz then renamed to .std.)
     """
     path = Path(filepath).resolve()
     if not path.is_file():
@@ -234,9 +235,11 @@ def transform_instance(filepath: str | Path) -> None:
         a.start_, a.index_, a.value_,
     )
 
-    out_path = path.with_suffix(".npz")
+    out_std = path.with_suffix(".std")
+    # savez_compressed appends .npz if missing; write to .npz then rename to .std
+    out_npz = path.with_suffix(".npz")
     np.savez_compressed(
-        out_path,
+        str(out_npz),
         c=c,
         b=b,
         A_data=A.data,
@@ -244,6 +247,7 @@ def transform_instance(filepath: str | Path) -> None:
         A_indptr=A.indptr,
         A_shape=np.array(A.shape),
     )
+    out_npz.rename(out_std)
 
 
 def transform_instance_class(

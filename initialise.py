@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Find an initial triple (x, y, s) with x > 0, s > 0 for standard-form LPs; write to .init (npz format). On failure, use selfdual-embedding (stub)."""
+"""Find an initial triple (x, y, s) with x > 0, s > 0 for standard-form LPs; write to .init (npz format). On failure, use self-dual embedding."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 import highspy
 import numpy as np
 from scipy.linalg import lstsq, null_space
-from scipy.sparse import csr_matrix
+from scipy.sparse import csr_matrix, eye, hstack, vstack
 from tqdm import tqdm
 
 try:
@@ -153,13 +153,73 @@ def selfdual_embedding(
     b: np.ndarray,
     c: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, tuple[csr_matrix, np.ndarray, np.ndarray] | None]:
-    """Return an initial triple (x, y, s) and optionally the embedded LP via the self-dual embedding.
+    """Return an initial triple (x, y, s) and the embedded LP via the self-dual embedding.
 
-    When implemented, returns (x, y, s, emb_lp) where emb_lp is (A_emb, b_emb, c_emb) for the
-    embedded problem in standard form; the embedded LP is stored as <base>.sde (npz format).
-    Not implemented; raise NotImplementedError.
+    Builds the homogeneous self-dual embedding in standard form:
+      min c_emb' x_emb  s.t.  A_emb x_emb = b_emb,  x_emb >= 0
+    with variable vector x_emb = (x, τ, y, s, κ). Chooses b_emb = A_emb @ z0 so that
+    z0 = (e, 1, 0, e, 1) is primal feasible; uses c_emb = 1 so that ỹ = 0 yields
+    s_emb = c_emb > 0. Returns (x, y, s) grouped to match the (x, y, s) pattern:
+    x = primal point, y = dual multipliers, s = dual slack for the embedded problem.
     """
-    raise NotImplementedError("selfdual_embedding is not implemented")
+    m, n = A.shape
+    b = np.asarray(b, dtype=np.float64).ravel()
+    c = np.asarray(c, dtype=np.float64).ravel()
+    assert b.size == m and c.size == n
+
+    # Variable layout: x_emb = (x [n], τ [1], y [m], s [n], κ [1]); total n_emb = 2*n + m + 2
+    # Constraints: (1) Ax - b*τ = 0 [m]; (2) -A'y + c*τ - s = 0 [n]; (3) b'y - c'x + κ = 0 [1]
+    n_emb = 2 * n + m + 2
+    m_emb = m + n + 1
+
+    # Block rows for A_emb (m_emb x n_emb)
+    # Row block 1 (m rows): [A, -b, 0, 0, 0]
+    A_csr = A.tocsr()
+    col_b = csr_matrix(-b.reshape(-1, 1))
+    col_zeros_m = csr_matrix((m, m))
+    col_zeros_n = csr_matrix((m, n))
+    col_zeros_1 = csr_matrix((m, 1))
+    B1 = hstack([A_csr, col_b, col_zeros_m, col_zeros_n, col_zeros_1], format="csr")
+
+    # Row block 2 (n rows): [0, c, -A', -I, 0]  (coefficients on x, τ, y, s, κ)
+    zeros_nn = csr_matrix((n, n))
+    col_c = csr_matrix(c.reshape(-1, 1))
+    neg_I = -eye(n, format="csr")
+    B2 = hstack([zeros_nn, col_c, -A_csr.T, neg_I, csr_matrix((n, 1))], format="csr")
+
+    # Row block 3 (1 row): [-c', 0, b', 0, 1]
+    row_c = csr_matrix(-c.reshape(1, -1))
+    row_b = csr_matrix(b.reshape(1, -1))
+    row_zeros_n = csr_matrix((1, n))
+    B3 = hstack(
+        [row_c, csr_matrix([[0.0]]), row_b, row_zeros_n, csr_matrix([[1.0]])],
+        format="csr",
+    )
+
+    A_emb = vstack([B1, B2, B3], format="csr")
+
+    # Strictly feasible point: z0 = (x0, τ0, y0, s0, κ0) with all entries > 0
+    x0 = np.ones(n, dtype=np.float64)
+    tau0 = 1.0
+    y0 = np.full(m, _STRICT_DELTA, dtype=np.float64)
+    s0 = np.ones(n, dtype=np.float64)
+    kappa0 = 1.0
+    z0 = np.concatenate([x0, [tau0], y0, s0, [kappa0]])
+    assert z0.size == n_emb
+
+    # Set b_emb so that A_emb @ z0 = b_emb (primal feasible)
+    b_emb = A_emb @ z0
+
+    # Objective: c_emb = 1 so that (z0, ỹ=0, s_emb=c_emb) has s_emb > 0
+    c_emb = np.ones(n_emb, dtype=np.float64)
+
+    # Group as (x, y, s) for the embedded problem: x = z0, y = 0, s = c_emb - A_emb' @ 0 = c_emb
+    x = z0
+    y_emb = np.zeros(m_emb, dtype=np.float64)
+    s = c_emb - A_emb.T @ y_emb  # = c_emb
+    assert np.all(s > 0) and np.all(x > 0)
+
+    return x, y_emb, s, (A_emb, b_emb, c_emb)
 
 
 def _write_std_npz(path: Path, A: csr_matrix, b: np.ndarray, c: np.ndarray) -> None:
@@ -179,7 +239,7 @@ def _write_std_npz(path: Path, A: csr_matrix, b: np.ndarray, c: np.ndarray) -> N
 def initialise_instance(filepath: str | Path) -> None:
     """Load standard-form LP from .std, find initial triple (x, y, s) with x > 0, s > 0, and save to .init (npz format).
 
-    If finding a triple fails, reverts to selfdual_embedding (stub). Writes x, y, s and embedding_used to <base>.init.
+    If finding a triple fails, reverts to selfdual_embedding. Writes x, y, s and embedding_used to <base>.init.
     When embedding is used, the embedded LP is written to <base>.sde (npz format).
     """
     path = Path(filepath).resolve()
@@ -235,11 +295,6 @@ def initialise_instance_class(
     for p in tqdm(paths, desc=instance_class, unit="instance"):
         try:
             initialise_instance(p)
-        except NotImplementedError:
-            warnings.warn(
-                f"selfdual_embedding not implemented; skipping {p}",
-                stacklevel=2,
-            )
         except Exception as e:
             warnings.warn(f"Failed {p}: {e}", stacklevel=2)
 

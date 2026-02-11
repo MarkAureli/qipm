@@ -152,18 +152,35 @@ def selfdual_embedding(
     A: csr_matrix,
     b: np.ndarray,
     c: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Return an initial triple (x, y, s) via the self-dual embedding when direct finding fails.
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, tuple[csr_matrix, np.ndarray, np.ndarray] | None]:
+    """Return an initial triple (x, y, s) and optionally the embedded LP via the self-dual embedding.
 
+    When implemented, returns (x, y, s, emb_lp) where emb_lp is (A_emb, b_emb, c_emb) for the
+    embedded problem in standard form; the embedded LP is stored as <base>.sde (npz format).
     Not implemented; raise NotImplementedError.
     """
     raise NotImplementedError("selfdual_embedding is not implemented")
 
 
+def _write_std_npz(path: Path, A: csr_matrix, b: np.ndarray, c: np.ndarray) -> None:
+    """Write standard-form LP (c, b, A) to path in npz format (no .npz suffix appended)."""
+    with open(path, "wb") as f:
+        np.savez_compressed(
+            f,
+            c=c,
+            b=b,
+            A_data=A.data,
+            A_indices=A.indices,
+            A_indptr=A.indptr,
+            A_shape=np.array(A.shape),
+        )
+
+
 def initialise_instance(filepath: str | Path) -> None:
     """Load standard-form LP from .std, find initial triple (x, y, s) with x > 0, s > 0, and save to .init (npz format).
 
-    If finding a triple fails, reverts to selfdual_embedding (stub). Writes x, y, s to <base>.init in npz format (no .npz in filename).
+    If finding a triple fails, reverts to selfdual_embedding (stub). Writes x, y, s and embedding_used to <base>.init.
+    When embedding is used, the embedded LP is written to <base>.sde (npz format).
     """
     path = Path(filepath).resolve()
     if not path.is_file():
@@ -172,14 +189,32 @@ def initialise_instance(filepath: str | Path) -> None:
         raise ValueError(f"Only .std instances are supported; got {path.suffix!r}")
 
     A, b, c = _load_standard_form(path)
+    embedding_used = False
+    emb_lp = None
     try:
         x, y, s = find_initial_triple(A, b, c)
     except Exception:
-        x, y, s = selfdual_embedding(A, b, c)
+        result = selfdual_embedding(A, b, c)
+        embedding_used = True
+        if len(result) == 4:
+            x, y, s, emb_lp = result
+        else:
+            x, y, s = result
 
     out_path = path.with_suffix(".init")
     with open(out_path, "wb") as f:
-        np.savez_compressed(f, x=x, y=y, s=s)
+        np.savez_compressed(
+            f,
+            x=x,
+            y=y,
+            s=s,
+            embedding_used=np.array(embedding_used),
+        )
+
+    if emb_lp is not None:
+        A_emb, b_emb, c_emb = emb_lp
+        sde_path = path.with_suffix(".sde")
+        _write_std_npz(sde_path, A_emb, b_emb, c_emb)
 
 
 def initialise_instance_class(

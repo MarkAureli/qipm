@@ -3,7 +3,8 @@
 For each fixture:
 1. Try to find a strictly feasible initial triple; if found, verify it.
 2. Build the self-dual embedding, compare to reference .sde in fixtures, validate SDE
-   structure, and check the embedding triple is strictly feasible w.r.t. the SDE.
+   structure, check the embedding triple is strictly feasible, and compare it to
+   reference initial triple stored in .init (NPZ: x, y, s).
 """
 
 from pathlib import Path
@@ -56,6 +57,15 @@ def assert_standard_form_equal(
     )
 
 
+def _load_init(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Load initial triple (x, y, s) from .init npz."""
+    data = np.load(path, allow_pickle=False)
+    x = np.asarray(data["x"], dtype=np.float64).ravel()
+    y = np.asarray(data["y"], dtype=np.float64).ravel()
+    s = np.asarray(data["s"], dtype=np.float64).ravel()
+    return x, y, s
+
+
 def assert_triple_strictly_feasible(
     A: csr_matrix,
     b: np.ndarray,
@@ -86,8 +96,11 @@ def test_initial_triple_and_embedding(stem: str) -> None:
     if not std_path.is_file():
         pytest.skip(f"Fixture not found: {std_path}")
     ref_sde_path = FIXTURES / f"{stem}.sde"
+    ref_init_path = FIXTURES / f"{stem}.init"
     if not ref_sde_path.is_file():
         pytest.skip(f"Reference .sde not found: {ref_sde_path}")
+    if not ref_init_path.is_file():
+        pytest.skip(f"Reference .init not found: {ref_init_path}")
 
     A, b, c = _load_standard_form(std_path)
     m, n = A.shape
@@ -116,3 +129,9 @@ def test_initial_triple_and_embedding(stem: str) -> None:
 
     # 3. Embedding triple (x_emb, y_emb, s_emb) is strictly feasible for SDE
     assert_triple_strictly_feasible(A_emb, b_emb, c_emb, x_emb, y_emb, s_emb)
+
+    # 4. Compare embedding triple to reference .init
+    x_ref, y_ref, s_ref = _load_init(ref_init_path)
+    np.testing.assert_allclose(x_emb, x_ref, rtol=RTOL, atol=ATOL, err_msg="x mismatch vs reference .init")
+    np.testing.assert_allclose(y_emb, y_ref, rtol=RTOL, atol=ATOL, err_msg="y mismatch vs reference .init")
+    np.testing.assert_allclose(s_emb, s_ref, rtol=RTOL, atol=ATOL, err_msg="s mismatch vs reference .init")

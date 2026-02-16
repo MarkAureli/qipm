@@ -189,17 +189,9 @@ def _lp_to_standard_form(
     return c_std, b_std, A_std
 
 
-def transform_instance(filepath: str | Path) -> None:
-    """Read MPS file, presolve with HiGHS, convert to standard form, and save result.
-
-    Standard form: min c'x  s.t.  Ax = b,  x >= 0.
-    Saves to the same path with extension replaced by .std, containing:
-    - c: objective vector (np.ndarray)
-    - b: RHS vector (np.ndarray)
-    - A_data, A_indices, A_indptr, A_shape: constraint matrix in CSR sparse format
-    (NumPy savez_compressed format; written via .npz then renamed to .std.)
-    """
-    path = Path(filepath).resolve()
+def _transform_instance_from_path(path: Path) -> None:
+    """Read MPS file at path, presolve with HiGHS, convert to standard form, and save .std next to it."""
+    path = path.resolve()
     if not path.is_file():
         raise FileNotFoundError(f"MPS file not found: {path}")
     if path.stat().st_size == 0:
@@ -250,6 +242,30 @@ def transform_instance(filepath: str | Path) -> None:
     out_npz.rename(out_std)
 
 
+def transform_instance(
+    instance_class: str,
+    instance_name: str,
+    cache_dir: str | Path | None = None,
+) -> None:
+    """Transform the MPS instance in cache_dir/instance_class/instance_name/ to standard form.
+
+    Discovers the single .mps file in that subdirectory and writes .std next to it.
+    instance_class: e.g. "netlib", "miplib".
+    instance_name: subfolder name (instance stem).
+    cache_dir: root containing instance-class subfolders; defaults to "cache_dir".
+    """
+    root = Path(cache_dir).resolve() if cache_dir is not None else Path("cache_dir").resolve()
+    instance_dir = root / instance_class / instance_name
+    if not instance_dir.is_dir():
+        raise FileNotFoundError(f"Instance directory not found: {instance_dir}")
+    mps_files = sorted(instance_dir.glob("*.mps"))
+    if len(mps_files) != 1:
+        raise FileNotFoundError(
+            f"Expected exactly one .mps in {instance_dir}; found {len(mps_files)}"
+        )
+    _transform_instance_from_path(mps_files[0])
+
+
 def transform_instance_class(
     instance_class: str,
     cache_dir: str | Path | None = None,
@@ -264,9 +280,9 @@ def transform_instance_class(
     if not folder.is_dir():
         raise FileNotFoundError(f"Instance class folder not found: {folder}")
 
-    mps_paths = sorted(folder.glob("*.mps"))
-    for mps_path in tqdm(mps_paths, desc=instance_class, unit="instance"):
-        transform_instance(mps_path)
+    subdirs = sorted(d for d in folder.iterdir() if d.is_dir())
+    for subdir in tqdm(subdirs, desc=instance_class, unit="instance"):
+        transform_instance(instance_class, subdir.name, cache_dir=root)
 
 
 def transform_all_instance_classes(

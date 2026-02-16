@@ -236,13 +236,9 @@ def _write_std_npz(path: Path, A: csr_matrix, b: np.ndarray, c: np.ndarray) -> N
         )
 
 
-def initialise_instance(filepath: str | Path) -> None:
-    """Load standard-form LP from .std, find initial triple (x, y, s) with x > 0, s > 0, and save to .init (npz format).
-
-    If finding a triple fails, reverts to selfdual_embedding. Writes x, y, s and embedding_used to <base>.init.
-    When embedding is used, the embedded LP is written to <base>.sde (npz format).
-    """
-    path = Path(filepath).resolve()
+def _initialise_instance_from_path(path: Path) -> None:
+    """Load .std at path, find initial triple (x, y, s) with x > 0, s > 0, write .init (and optionally .sde) next to it."""
+    path = path.resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Instance file not found: {path}")
     if path.suffix.lower() != ".std":
@@ -277,6 +273,30 @@ def initialise_instance(filepath: str | Path) -> None:
         _write_std_npz(sde_path, A_emb, b_emb, c_emb)
 
 
+def initialise_instance(
+    instance_class: str,
+    instance_name: str,
+    cache_dir: str | Path | None = None,
+) -> None:
+    """Compute initial triple for the .std instance in cache_dir/instance_class/instance_name/.
+
+    Discovers the single .std file in that subdirectory; writes .init (and optionally .sde) next to it.
+    instance_class: e.g. "netlib", "miplib".
+    instance_name: subfolder name (instance stem).
+    cache_dir: root containing instance-class subfolders; defaults to "cache_dir".
+    """
+    root = Path(cache_dir).resolve() if cache_dir is not None else Path("cache_dir").resolve()
+    instance_dir = root / instance_class / instance_name
+    if not instance_dir.is_dir():
+        raise FileNotFoundError(f"Instance directory not found: {instance_dir}")
+    std_files = sorted(instance_dir.glob("*.std"))
+    if len(std_files) != 1:
+        raise FileNotFoundError(
+            f"Expected exactly one .std in {instance_dir}; found {len(std_files)}"
+        )
+    _initialise_instance_from_path(std_files[0])
+
+
 def initialise_instance_class(
     instance_class: str,
     cache_dir: str | Path | None = None,
@@ -291,12 +311,12 @@ def initialise_instance_class(
     if not folder.is_dir():
         raise FileNotFoundError(f"Instance class folder not found: {folder}")
 
-    paths = sorted(folder.glob("*.std"))
-    for p in tqdm(paths, desc=instance_class, unit="instance"):
+    subdirs = sorted(d for d in folder.iterdir() if d.is_dir())
+    for subdir in tqdm(subdirs, desc=instance_class, unit="instance"):
         try:
-            initialise_instance(p)
+            initialise_instance(instance_class, subdir.name, cache_dir=root)
         except Exception as e:
-            warnings.warn(f"Failed {p}: {e}", stacklevel=2)
+            warnings.warn(f"Failed {instance_class}/{subdir.name}: {e}", stacklevel=2)
 
 
 def initialise_all_instance_classes(

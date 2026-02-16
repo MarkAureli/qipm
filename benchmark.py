@@ -42,18 +42,12 @@ def _load_standard_form(path: Path) -> tuple[csr_matrix, np.ndarray, np.ndarray]
     return A, b, c
 
 
-def benchmark_instance(
-    filepath: str | Path,
+def _benchmark_instance_from_path(
+    path: Path,
     qipm_numbers: list[int] | None = None,
 ) -> None:
-    """Load standard-form LP from .std, compute gate counts for requested qipm(s), write to .qipm1/.qipm2/.qipm3.
-
-    filepath: path to a .std instance file.
-    qipm_numbers: which qipm variants to run (1, 2, 3). If None or empty, all three are run.
-
-    Writes one number (plain text) per file: instance.qipm1, instance.qipm2, instance.qipm3.
-    """
-    path = Path(filepath).resolve()
+    """Load .std at path, compute gate counts for requested qipm(s), write .qipm1/.qipm2/.qipm3 next to it."""
+    path = path.resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Instance file not found: {path}")
     if path.suffix.lower() != ".std":
@@ -73,6 +67,32 @@ def benchmark_instance(
         out_path.write_text(f"{count}\n")
 
 
+def benchmark_instance(
+    instance_class: str,
+    instance_name: str,
+    cache_dir: str | Path | None = None,
+    qipm_numbers: list[int] | None = None,
+) -> None:
+    """Run gate-count benchmark for the .std instance in cache_dir/instance_class/instance_name/.
+
+    Discovers the single .std file in that subdirectory; writes .qipm1/.qipm2/.qipm3 next to it.
+    instance_class: e.g. "netlib", "miplib".
+    instance_name: subfolder name (instance stem).
+    cache_dir: root containing instance-class subfolders; defaults to "cache_dir".
+    qipm_numbers: which qipm variants (1, 2, 3). If None, all three are run.
+    """
+    root = Path(cache_dir).resolve() if cache_dir is not None else Path("cache_dir").resolve()
+    instance_dir = root / instance_class / instance_name
+    if not instance_dir.is_dir():
+        raise FileNotFoundError(f"Instance directory not found: {instance_dir}")
+    std_files = sorted(instance_dir.glob("*.std"))
+    if len(std_files) != 1:
+        raise FileNotFoundError(
+            f"Expected exactly one .std in {instance_dir}; found {len(std_files)}"
+        )
+    _benchmark_instance_from_path(std_files[0], qipm_numbers=qipm_numbers)
+
+
 def benchmark_instance_class(
     instance_class: str,
     qipm_numbers: list[int] | None = None,
@@ -89,9 +109,9 @@ def benchmark_instance_class(
     if not folder.is_dir():
         raise FileNotFoundError(f"Instance class folder not found: {folder}")
 
-    paths = sorted(folder.glob("*.std"))
-    for p in tqdm(paths, desc=instance_class, unit="instance"):
-        benchmark_instance(p, qipm_numbers=qipm_numbers)
+    subdirs = sorted(d for d in folder.iterdir() if d.is_dir())
+    for subdir in tqdm(subdirs, desc=instance_class, unit="instance"):
+        benchmark_instance(instance_class, subdir.name, cache_dir=root, qipm_numbers=qipm_numbers)
 
 
 def benchmark_all_instance_classes(

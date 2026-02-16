@@ -81,20 +81,22 @@ def _is_mps_in_min_max(entry_path: str) -> bool:
 
 
 def _copy_zip_mps_to_cache(zip_path: Path, cache_path: Path, cache_class: str) -> None:
-    """Extract .mps files under min/ or max/ from zip into cache_path/cache_class/."""
+    """Extract .mps files under min/ or max/ from zip into cache_path/cache_class/<stem>/."""
     with zipfile.ZipFile(zip_path, "r") as zf:
         for info in zf.infolist():
             if info.is_dir():
                 continue
             if not _is_mps_in_min_max(info.filename):
                 continue
-            dest = cache_path / cache_class / Path(info.filename).name
+            name = Path(info.filename).name
+            stem = Path(info.filename).stem
+            dest = cache_path / cache_class / stem / name
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(zf.read(info.filename))
 
 
 def _copy_zip_mps_by_filename(zip_path: Path, cache_path: Path) -> None:
-    """Extract .mps from zip into clique/independent_set/vertex_cover by filename."""
+    """Extract .mps from zip into clique/independent_set/vertex_cover by filename; one subfolder per instance."""
     with zipfile.ZipFile(zip_path, "r") as zf:
         for info in zf.infolist():
             if info.is_dir():
@@ -102,16 +104,18 @@ def _copy_zip_mps_by_filename(zip_path: Path, cache_path: Path) -> None:
             if not _is_mps_in_min_max(info.filename):
                 continue
             filename = Path(info.filename).name
+            stem = Path(info.filename).stem
             cache_class = _class_from_filename(filename)
             if cache_class is None:
                 continue
-            dest = cache_path / cache_class / filename
+            dest = cache_path / cache_class / stem / filename
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(zf.read(info.filename))
 
 
-def _write_time_files_from_evaluation(clone_path: Path, cache_path: Path) -> None:
-    """Read benchmark/01_evaluation/*/.../*_compressed.zip; each entry is a .data file (JSON). Write .time files from runtime_primal."""
+def _write_data_files_from_evaluation(clone_path: Path, cache_path: Path) -> None:
+    """Read benchmark/01_evaluation/*/.../*_compressed.zip; each entry is a .data file (JSON).
+    Write per-instance .data files (JSON with key runtime_glpk) into the instance subfolder."""
     eval_root = clone_path / EVAL_ROOT
     if not eval_root.is_dir():
         return
@@ -141,9 +145,12 @@ def _write_time_files_from_evaluation(clone_path: Path, cache_path: Path) -> Non
                         if resolved is None:
                             continue
                         cache_class, stem = resolved
-                        time_path = cache_path / cache_class / f"{stem}.time"
-                        time_path.parent.mkdir(parents=True, exist_ok=True)
-                        time_path.write_text(str(runtime_primal))
+                        instance_dir = cache_path / cache_class / stem
+                        instance_dir.mkdir(parents=True, exist_ok=True)
+                        data_path = instance_dir / f"{stem}.data"
+                        data_path.write_text(
+                            json.dumps({"runtime_glpk": runtime_primal}, indent=None)
+                        )
 
 
 def extract(clone_path: Path, cache_path: Path) -> None:
@@ -165,10 +172,13 @@ def extract(clone_path: Path, cache_path: Path) -> None:
         if zip_path.exists():
             _copy_zip_mps_by_filename(zip_path, cache_path)
 
-    # External repo has an empty/broken entry; remove it so transform does not fail.
-    (cache_path / "stochlp" / "stoprobs.zip.mps").unlink(missing_ok=True)
+    # External repo has an empty/broken stochlp entry (stoprobs.zip): no .mps or broken file.
+    # Remove the instance subfolder entirely so transform does not expect one .mps there.
+    stoprobs_dir = cache_path / "stochlp" / "stoprobs.zip"
+    if stoprobs_dir.is_dir():
+        shutil.rmtree(stoprobs_dir, ignore_errors=True)
 
-    _write_time_files_from_evaluation(clone_path, cache_path)
+    _write_data_files_from_evaluation(clone_path, cache_path)
 
 
 def require_cmd(name: str) -> None:

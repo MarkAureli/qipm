@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -70,17 +71,9 @@ def _solve_std(path: Path) -> float:
     return elapsed
 
 
-def solve_instance(filepath: str | Path) -> None:
-    """Solve an LP instance with HiGHS and write solve time to a sidecar file.
-
-    - If filepath is .mps: read into HiGHS and solve directly (no transformation).
-      Writes solve time to the same path with extension .mps_time (e.g. instance.mps -> instance.mps_time).
-    - If filepath is .std: load standard form (c, b, A), build HiGHS model, solve.
-      Writes solve time to the same path with extension .std_time (e.g. instance.std -> instance.std_time).
-
-    Raises FileNotFoundError if the file does not exist, ValueError for unsupported extension.
-    """
-    path = Path(filepath).resolve()
+def _solve_instance_from_path(path: Path) -> None:
+    """Solve the instance at path (.mps or .std) with HiGHS; write solve time to sidecar and to instance .data."""
+    path = path.resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Instance file not found: {path}")
 
@@ -88,13 +81,54 @@ def solve_instance(filepath: str | Path) -> None:
     if suffix == ".mps":
         elapsed = _solve_mps(path)
         out_path = path.with_suffix(".mps_time")
+        data_key = "runtime_highs_mps"
     elif suffix == ".std":
         elapsed = _solve_std(path)
         out_path = path.with_suffix(".std_time")
+        data_key = "runtime_highs_std"
     else:
         raise ValueError(f"Unsupported instance format: {suffix}. Use .mps or .std.")
 
     out_path.write_text(f"{elapsed}\n")
+
+    data_path = path.with_suffix(".data")
+    if data_path.exists():
+        data = json.loads(data_path.read_text())
+    else:
+        data = {}
+    data[data_key] = elapsed
+    data_path.write_text(json.dumps(data, indent=None))
+
+
+def solve_instance(
+    instance_class: str,
+    instance_name: str,
+    cache_dir: str | Path | None = None,
+    formats: str = "both",
+) -> None:
+    """Solve the instance(s) in cache_dir/instance_class/instance_name/ with HiGHS.
+
+    Discovers .mps and/or .std in that subdirectory according to formats; writes .mps_time / .std_time next to each.
+    instance_class: e.g. "netlib", "miplib".
+    instance_name: subfolder name (instance stem).
+    cache_dir: root containing instance-class subfolders; defaults to "cache_dir".
+    formats: "mps" | "std" | "both" — which formats to solve (default "both").
+    """
+    if formats not in ("mps", "std", "both"):
+        raise ValueError(f"formats must be 'mps', 'std', or 'both'; got {formats!r}")
+
+    root = Path(cache_dir).resolve() if cache_dir is not None else Path("cache_dir").resolve()
+    instance_dir = root / instance_class / instance_name
+    if not instance_dir.is_dir():
+        raise FileNotFoundError(f"Instance directory not found: {instance_dir}")
+
+    paths: list[Path] = []
+    if formats in ("mps", "both"):
+        paths.extend(sorted(instance_dir.glob("*.mps")))
+    if formats in ("std", "both"):
+        paths.extend(sorted(instance_dir.glob("*.std")))
+    for p in paths:
+        _solve_instance_from_path(p)
 
 
 def solve_instance_class(
@@ -116,13 +150,9 @@ def solve_instance_class(
     if not folder.is_dir():
         raise FileNotFoundError(f"Instance class folder not found: {folder}")
 
-    paths: list[Path] = []
-    if formats in ("mps", "both"):
-        paths.extend(sorted(folder.glob("*.mps")))
-    if formats in ("std", "both"):
-        paths.extend(sorted(folder.glob("*.std")))
-    for p in tqdm(paths, desc=instance_class, unit="instance"):
-        solve_instance(p)
+    subdirs = sorted(d for d in folder.iterdir() if d.is_dir())
+    for subdir in tqdm(subdirs, desc=instance_class, unit="instance"):
+        solve_instance(instance_class, subdir.name, cache_dir=root, formats=formats)
 
 
 def solve_all_instance_classes(

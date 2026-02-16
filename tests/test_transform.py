@@ -62,11 +62,14 @@ def test_transform_instance_matches_expected(stem: str, tmp_path: Path) -> None:
         pytest.skip(f"Reference .std not found: {ref_std_path}")
 
     import shutil
-    mps_tmp = tmp_path / f"{stem}.mps"
+    instance_class = "cls"
+    instance_dir = tmp_path / instance_class / stem
+    instance_dir.mkdir(parents=True)
+    mps_tmp = instance_dir / f"{stem}.mps"
     shutil.copy(mps_path, mps_tmp)
 
-    transform_instance(mps_tmp)
-    out_path = tmp_path / f"{stem}.std"
+    transform_instance(instance_class, stem, cache_dir=tmp_path)
+    out_path = instance_dir / f"{stem}.std"
     assert out_path.suffix == ".std"
     assert out_path.name == f"{stem}.std"
 
@@ -79,22 +82,25 @@ def test_transform_instance_matches_expected(stem: str, tmp_path: Path) -> None:
 
 
 def test_transform_instance_writes_std(tmp_path: Path) -> None:
-    """transform_instance writes .std file next to the MPS file."""
+    """transform_instance writes .std file next to the MPS file in the instance subfolder."""
     mps_path = FIXTURES / "equality.mps"
     if not mps_path.is_file():
         pytest.skip("Fixture equality.mps not found")
-    mps_tmp = tmp_path / "equality.mps"
     import shutil
-    shutil.copy(mps_path, mps_tmp)
+    instance_class = "cls"
+    instance_name = "equality"
+    instance_dir = tmp_path / instance_class / instance_name
+    instance_dir.mkdir(parents=True)
+    shutil.copy(mps_path, instance_dir / "equality.mps")
 
-    transform_instance(mps_tmp)
-    out = tmp_path / "equality.std"
+    transform_instance(instance_class, instance_name, cache_dir=tmp_path)
+    out = instance_dir / "equality.std"
     assert out.is_file()
 
 
-def test_transform_instance_file_not_found() -> None:
-    """transform_instance raises FileNotFoundError for missing file."""
-    with pytest.raises(FileNotFoundError, match="not found"):
-        transform_instance("/nonexistent/path.mps")
+def test_transform_instance_file_not_found(tmp_path: Path) -> None:
+    """transform_instance raises FileNotFoundError when instance subdir has no .mps."""
+    with pytest.raises(FileNotFoundError, match="Expected exactly one .mps|Instance directory not found"):
+        transform_instance("x", "nonexistent", cache_dir=tmp_path)
 
 

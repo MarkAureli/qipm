@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("highspy", reason="highspy required for solve tests")
-from solve import solve_instance
+from solve import solve_instance, _solve_instance_from_path
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -32,11 +32,13 @@ def test_solve_instance_std_completes_and_writes_std_time(stem: str, tmp_path: P
     if not std_path.is_file():
         pytest.skip(f"Fixture not found: {std_path}")
 
-    std_tmp = tmp_path / f"{stem}.std"
-    shutil.copy(std_path, std_tmp)
-    solve_instance(std_tmp)
+    instance_class = "cls"
+    instance_dir = tmp_path / instance_class / stem
+    instance_dir.mkdir(parents=True)
+    shutil.copy(std_path, instance_dir / f"{stem}.std")
+    solve_instance(instance_class, stem, cache_dir=tmp_path, formats="std")
 
-    std_time_path = tmp_path / f"{stem}.std_time"
+    std_time_path = instance_dir / f"{stem}.std_time"
     assert std_time_path.is_file(), "solve_instance should write .std_time for .std"
     elapsed = float(std_time_path.read_text().strip())
     assert elapsed >= 0.0, "Solve time should be non-negative"
@@ -49,25 +51,27 @@ def test_solve_instance_mps_completes_and_writes_mps_time(stem: str, tmp_path: P
     if not mps_path.is_file():
         pytest.skip(f"Fixture not found: {mps_path}")
 
-    mps_tmp = tmp_path / f"{stem}.mps"
-    shutil.copy(mps_path, mps_tmp)
-    solve_instance(mps_tmp)
+    instance_class = "cls"
+    instance_dir = tmp_path / instance_class / stem
+    instance_dir.mkdir(parents=True)
+    shutil.copy(mps_path, instance_dir / f"{stem}.mps")
+    solve_instance(instance_class, stem, cache_dir=tmp_path, formats="mps")
 
-    mps_time_path = tmp_path / f"{stem}.mps_time"
+    mps_time_path = instance_dir / f"{stem}.mps_time"
     assert mps_time_path.is_file(), "solve_instance should write .mps_time for .mps"
     elapsed = float(mps_time_path.read_text().strip())
     assert elapsed >= 0.0, "Solve time should be non-negative"
 
 
-def test_solve_instance_file_not_found() -> None:
-    """solve_instance raises FileNotFoundError for missing file."""
-    with pytest.raises(FileNotFoundError, match="not found"):
-        solve_instance("/nonexistent/path.std")
+def test_solve_instance_file_not_found(tmp_path: Path) -> None:
+    """solve_instance raises FileNotFoundError when instance subdir does not exist."""
+    with pytest.raises(FileNotFoundError, match="Instance directory not found"):
+        solve_instance("x", "nonexistent", cache_dir=tmp_path)
 
 
 def test_solve_instance_unsupported_format(tmp_path: Path) -> None:
-    """solve_instance raises ValueError for unsupported extension."""
+    """_solve_instance_from_path raises ValueError for unsupported extension."""
     bad_path = tmp_path / "dummy.xyz"
     bad_path.write_text("not an instance")
     with pytest.raises(ValueError, match="Unsupported instance format"):
-        solve_instance(bad_path)
+        _solve_instance_from_path(bad_path)

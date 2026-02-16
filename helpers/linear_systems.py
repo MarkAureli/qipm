@@ -73,7 +73,9 @@ def build_modified_nes(
     d2 = x / s  # shape (n,)
     # D_B and its inverse (for indices in B)
     if B is None:
-        _, _, P = qr(A.T, pivoting=True)
+        # QR with column pivoting on A: A[:, P] = Q @ R; P permutes columns of A (length n).
+        # First m indices in P give m linearly independent columns when A has full row rank.
+        _, _, P = qr(A, pivoting=True)
         B = P[:m]
     B = np.asarray(B, dtype=np.intp).ravel()
     if B.size != m:

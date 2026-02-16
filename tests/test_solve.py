@@ -1,8 +1,9 @@
-"""Tests for solve_instance: MPS or .std LP, solve with HiGHS, write .mps_time or .std_time.
+"""Tests for solve_instance: MPS or .std LP, solve with HiGHS, write runtime to instance .data.
 
 Uses the same fixture stems as test_transform; reference .std files are used for standard-form tests.
 """
 
+import json
 import shutil
 from pathlib import Path
 
@@ -26,8 +27,8 @@ SOLVE_FIXTURE_STEMS = [
 
 
 @pytest.mark.parametrize("stem", SOLVE_FIXTURE_STEMS)
-def test_solve_instance_std_completes_and_writes_std_time(stem: str, tmp_path: Path) -> None:
-    """Solve .std instance; assert no error and .std_time written with valid time."""
+def test_solve_instance_std_completes_and_writes_data(stem: str, tmp_path: Path) -> None:
+    """Solve .std instance; assert no error and runtime_highs_std written to .data."""
     std_path = FIXTURES / f"{stem}.std"
     if not std_path.is_file():
         pytest.skip(f"Fixture not found: {std_path}")
@@ -38,15 +39,16 @@ def test_solve_instance_std_completes_and_writes_std_time(stem: str, tmp_path: P
     shutil.copy(std_path, instance_dir / f"{stem}.std")
     solve_instance(instance_class, stem, cache_dir=tmp_path, formats="std")
 
-    std_time_path = instance_dir / f"{stem}.std_time"
-    assert std_time_path.is_file(), "solve_instance should write .std_time for .std"
-    elapsed = float(std_time_path.read_text().strip())
-    assert elapsed >= 0.0, "Solve time should be non-negative"
+    data_path = instance_dir / f"{stem}.data"
+    assert data_path.is_file(), "solve_instance should write .data for .std"
+    data = json.loads(data_path.read_text())
+    assert "runtime_highs_std" in data
+    assert data["runtime_highs_std"] >= 0.0, "Solve time should be non-negative"
 
 
 @pytest.mark.parametrize("stem", SOLVE_FIXTURE_STEMS)
-def test_solve_instance_mps_completes_and_writes_mps_time(stem: str, tmp_path: Path) -> None:
-    """Solve .mps instance; assert no error and .mps_time written with valid time."""
+def test_solve_instance_mps_completes_and_writes_data(stem: str, tmp_path: Path) -> None:
+    """Solve .mps instance; assert no error and runtime_highs_mps written to .data."""
     mps_path = FIXTURES / f"{stem}.mps"
     if not mps_path.is_file():
         pytest.skip(f"Fixture not found: {mps_path}")
@@ -57,10 +59,11 @@ def test_solve_instance_mps_completes_and_writes_mps_time(stem: str, tmp_path: P
     shutil.copy(mps_path, instance_dir / f"{stem}.mps")
     solve_instance(instance_class, stem, cache_dir=tmp_path, formats="mps")
 
-    mps_time_path = instance_dir / f"{stem}.mps_time"
-    assert mps_time_path.is_file(), "solve_instance should write .mps_time for .mps"
-    elapsed = float(mps_time_path.read_text().strip())
-    assert elapsed >= 0.0, "Solve time should be non-negative"
+    data_path = instance_dir / f"{stem}.data"
+    assert data_path.is_file(), "solve_instance should write .data for .mps"
+    data = json.loads(data_path.read_text())
+    assert "runtime_highs_mps" in data
+    assert data["runtime_highs_mps"] >= 0.0, "Solve time should be non-negative"
 
 
 def test_solve_instance_file_not_found(tmp_path: Path) -> None:

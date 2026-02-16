@@ -72,7 +72,7 @@ def _solve_std(path: Path) -> float:
 
 
 def _solve_instance_from_path(path: Path) -> None:
-    """Solve the instance at path (.mps or .std) with HiGHS; write solve time to sidecar and to instance .data."""
+    """Solve the instance at path (.mps or .std) with HiGHS; write solve time to instance .data."""
     path = path.resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Instance file not found: {path}")
@@ -80,16 +80,12 @@ def _solve_instance_from_path(path: Path) -> None:
     suffix = path.suffix.lower()
     if suffix == ".mps":
         elapsed = _solve_mps(path)
-        out_path = path.with_suffix(".mps_time")
         data_key = "runtime_highs_mps"
     elif suffix == ".std":
         elapsed = _solve_std(path)
-        out_path = path.with_suffix(".std_time")
         data_key = "runtime_highs_std"
     else:
         raise ValueError(f"Unsupported instance format: {suffix}. Use .mps or .std.")
-
-    out_path.write_text(f"{elapsed}\n")
 
     data_path = path.with_suffix(".data")
     if data_path.exists():
@@ -108,7 +104,7 @@ def solve_instance(
 ) -> None:
     """Solve the instance(s) in cache_dir/instance_class/instance_name/ with HiGHS.
 
-    Discovers .mps and/or .std in that subdirectory according to formats; writes .mps_time / .std_time next to each.
+    Discovers .mps and/or .std in that subdirectory according to formats; writes runtime to instance .data.
     instance_class: e.g. "netlib", "miplib".
     instance_name: subfolder name (instance stem).
     cache_dir: root containing instance-class subfolders; defaults to "cache_dir".

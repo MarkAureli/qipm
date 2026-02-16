@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark LP instances (standard-form .std): compute gate counts for qipm1/2/3 and write to .qipm1/.qipm2/.qipm3."""
+"""Benchmark LP instances: (A,b,c) from .sde if present else .std; initial triple from .init; compute gate counts for qipm1/2/3 and write .qipm1/.qipm2/.qipm3."""
 
 from __future__ import annotations
 
@@ -9,19 +9,47 @@ import numpy as np
 from scipy.sparse import csr_matrix
 from tqdm import tqdm
 
+from helpers.gate_count_qlsa import gate_count_qlsa
+from helpers.gate_count_state_prep import gate_count_state_preparation
+from helpers.linear_systems import build_modified_nes
 
-def _gate_count_qipm1(A: csr_matrix, b: np.ndarray, c: np.ndarray) -> int:
-    """Return gate count for qipm1. Standard form: min c'x s.t. Ax = b, x >= 0."""
+
+def _gate_count_qipm1(
+    A: csr_matrix,
+    b: np.ndarray,
+    c: np.ndarray,
+    x_init: np.ndarray | None,
+    y_init: np.ndarray | None,
+    s_init: np.ndarray | None,
+) -> int:
+    """Return gate count for qipm1. Standard form: min c'x s.t. Ax = b, x >= 0. Requires initial triple (x_init, y_init, s_init) from .init."""
+    if x_init is None or y_init is None or s_init is None:
+        raise ValueError("qipm1 requires initial triple (x_init, y_init, s_init) from .init")
+    M_hat, omega_hat = build_modified_nes(A, b, c, x_init, y_init, s_init, mu=1.0)
+    return gate_count_qlsa(M_hat) + gate_count_state_preparation(omega_hat)
+
+
+def _gate_count_qipm2(
+    A: csr_matrix,
+    b: np.ndarray,
+    c: np.ndarray,
+    x_init: np.ndarray | None,
+    y_init: np.ndarray | None,
+    s_init: np.ndarray | None,
+) -> int:
+    """Return gate count for qipm2. Standard form: min c'x s.t. Ax = b, x >= 0. Requires initial triple (x_init, y_init, s_init) from .init."""
     raise NotImplementedError
 
 
-def _gate_count_qipm2(A: csr_matrix, b: np.ndarray, c: np.ndarray) -> int:
-    """Return gate count for qipm2. Standard form: min c'x s.t. Ax = b, x >= 0."""
-    raise NotImplementedError
-
-
-def _gate_count_qipm3(A: csr_matrix, b: np.ndarray, c: np.ndarray) -> int:
-    """Return gate count for qipm3. Standard form: min c'x s.t. Ax = b, x >= 0."""
+def _gate_count_qipm3(
+    A: csr_matrix,
+    b: np.ndarray,
+    c: np.ndarray,
+    x_init: np.ndarray | None,
+    y_init: np.ndarray | None,
+    s_init: np.ndarray | None,
+) -> int:
+    """Return gate count for qipm3. Standard form: min c'x s.t. Ax = b, x >= 0. Requires initial triple (x_init, y_init, s_init) from .init."""
     raise NotImplementedError
 
 
@@ -29,7 +57,7 @@ _GATE_COUNT_FUNCS = {1: _gate_count_qipm1, 2: _gate_count_qipm2, 3: _gate_count_
 
 
 def _load_standard_form(path: Path) -> tuple[csr_matrix, np.ndarray, np.ndarray]:
-    """Load (A, b, c) from .std standard-form LP. A returned as CSR."""
+    """Load (A, b, c) from .std or .sde standard-form LP (same npz format). A returned as CSR."""
     data = np.load(path)
     c = np.asarray(data["c"], dtype=np.float64).ravel()
     b = np.asarray(data["b"], dtype=np.float64).ravel()
@@ -42,16 +70,33 @@ def _load_standard_form(path: Path) -> tuple[csr_matrix, np.ndarray, np.ndarray]
     return A, b, c
 
 
+def _load_init(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Load initial triple (x, y, s) from .init npz."""
+    data = np.load(path)
+    x = np.asarray(data["x"], dtype=np.float64).ravel()
+    y = np.asarray(data["y"], dtype=np.float64).ravel()
+    s = np.asarray(data["s"], dtype=np.float64).ravel()
+    return x, y, s
+
+
 def _benchmark_instance_from_path(
     path: Path,
     qipm_numbers: list[int] | None = None,
 ) -> None:
-    """Load .std at path, compute gate counts for requested qipm(s), write .qipm1/.qipm2/.qipm3 next to it."""
+    """Load (A, b, c) from .sde if present else .std; load initial triple from .init; compute gate counts, write .qipm1/.qipm2/.qipm3. path must be .std or .sde."""
     path = path.resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Instance file not found: {path}")
-    if path.suffix.lower() != ".std":
-        raise ValueError(f"Only .std instances are supported; got {path.suffix!r}")
+    suf = path.suffix.lower()
+    if suf not in (".std", ".sde"):
+        raise ValueError(f"Path must be .std or .sde; got {path.suffix!r}")
+
+    base = path.with_suffix("")
+    sde_path = base.with_suffix(".sde")
+    std_path = base.with_suffix(".std")
+    lp_path = sde_path if sde_path.is_file() else std_path
+    if not lp_path.is_file():
+        raise FileNotFoundError(f"Neither {sde_path} nor {std_path} found")
 
     numbers = qipm_numbers if qipm_numbers else [1, 2, 3]
     if not numbers:
@@ -60,10 +105,17 @@ def _benchmark_instance_from_path(
         if n not in (1, 2, 3):
             raise ValueError(f"qipm_numbers must contain only 1, 2, or 3; got {n}")
 
-    A, b, c = _load_standard_form(path)
+    A, b, c = _load_standard_form(lp_path)
+
+    init_path = base.with_suffix(".init")
+    if init_path.is_file():
+        x_init, y_init, s_init = _load_init(init_path)
+    else:
+        x_init, y_init, s_init = None, None, None
+
     for n in numbers:
-        count = _GATE_COUNT_FUNCS[n](A, b, c)
-        out_path = path.with_suffix(f".qipm{n}")
+        count = _GATE_COUNT_FUNCS[n](A, b, c, x_init, y_init, s_init)
+        out_path = base.with_suffix(f".qipm{n}")
         out_path.write_text(f"{count}\n")
 
 
@@ -73,9 +125,9 @@ def benchmark_instance(
     cache_dir: str | Path | None = None,
     qipm_numbers: list[int] | None = None,
 ) -> None:
-    """Run gate-count benchmark for the .std instance in cache_dir/instance_class/instance_name/.
+    """Run gate-count benchmark for the instance in cache_dir/instance_class/instance_name/.
 
-    Discovers the single .std file in that subdirectory; writes .qipm1/.qipm2/.qipm3 next to it.
+    Discovers the instance by .sde if present (exactly one), else by .std (exactly one). Loads (A,b,c) from that file and initial triple from .init; writes .qipm1/.qipm2/.qipm3 next to it.
     instance_class: e.g. "netlib", "miplib".
     instance_name: subfolder name (instance stem).
     cache_dir: root containing instance-class subfolders; defaults to "cache_dir".
@@ -85,12 +137,21 @@ def benchmark_instance(
     instance_dir = root / instance_class / instance_name
     if not instance_dir.is_dir():
         raise FileNotFoundError(f"Instance directory not found: {instance_dir}")
+    sde_files = sorted(instance_dir.glob("*.sde"))
     std_files = sorted(instance_dir.glob("*.std"))
-    if len(std_files) != 1:
-        raise FileNotFoundError(
-            f"Expected exactly one .std in {instance_dir}; found {len(std_files)}"
-        )
-    _benchmark_instance_from_path(std_files[0], qipm_numbers=qipm_numbers)
+    if sde_files:
+        if len(sde_files) != 1:
+            raise FileNotFoundError(
+                f"Expected exactly one .sde in {instance_dir}; found {len(sde_files)}"
+            )
+        instance_path = sde_files[0]
+    else:
+        if len(std_files) != 1:
+            raise FileNotFoundError(
+                f"Expected exactly one .std in {instance_dir}; found {len(std_files)}"
+            )
+        instance_path = std_files[0]
+    _benchmark_instance_from_path(instance_path, qipm_numbers=qipm_numbers)
 
 
 def benchmark_instance_class(

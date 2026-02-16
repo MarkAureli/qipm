@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Build linear systems of equations (e.g. modified NES from IPM)."""
+
+from __future__ import annotations
+
+import numpy as np
+from scipy.linalg import qr
+from scipy.sparse import spmatrix
+
+
+def build_modified_nes(
+    A: np.ndarray | spmatrix,
+    b: np.ndarray,
+    c: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    s: np.ndarray,
+    mu: float | None = None,
+    sigma: float = 1.0,
+    B: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build M̂ and ω̂ from the modified NES (12): M̂ z = ω̂.
+
+    Notation (paper): X = diag(x), S = diag(s), D = X^{1/2} S^{-1/2};
+    M = A D^2 A^T; ω = A D^2 c - M y - σμ A S^{-1} 1 + b - A x.
+    Basis B ⊆ {0..n-1} with |B| = m s.t. A_B = A[:, B] is invertible.
+    Â = A_B^{-1} A, b̂ = A_B^{-1} b; D_B = diag(x_B)^{1/2} diag(s_B)^{-1/2}.
+    Then:
+      M̂ = D_B^{-1} A_B^{-1} M (D_B^{-1} A_B^{-1})^T,
+      ω̂ = D_B^{-1} A_B^{-1} ω.
+
+    Parameters
+    ----------
+    A : (m, n) matrix
+        Constraint matrix (full row rank).
+    b : (m,) array
+    c : (n,) array
+    x, s : (n,) arrays
+        Primal and dual slacks (x > 0, s > 0).
+    y : (m,) array
+    mu : float or None
+        Barrier parameter. If None, μ = x^T s / n.
+    sigma : float
+        Centering parameter (default 1.0).
+    B : (m,) int array or None
+        Column indices for basis A_B. If None, chosen via QR with column pivoting on A.
+
+    Returns
+    -------
+    M_hat : (m, m) array
+        Modified constraint matrix in (12).
+    omega_hat : (m,) array
+        RHS in (12).
+    """
+    A = np.asarray(A) if not isinstance(A, np.ndarray) else A
+    if isinstance(A, spmatrix):
+        A = A.toarray()
+    A = np.atleast_2d(A)
+    b = np.asarray(b, dtype=np.float64).ravel()
+    c = np.asarray(c, dtype=np.float64).ravel()
+    x = np.asarray(x, dtype=np.float64).ravel()
+    y = np.asarray(y, dtype=np.float64).ravel()
+    s = np.asarray(s, dtype=np.float64).ravel()
+
+    m, n = A.shape
+    if b.size != m or c.size != n or x.size != n or s.size != n or y.size != m:
+        raise ValueError("A (m,n), b (m), c (n), x (n), y (m), s (n) size mismatch")
+
+    if mu is None:
+        mu = float(np.dot(x, s)) / n
+
+    # D^2 = X S^{-1} (diagonal)
+    d2 = x / s  # shape (n,)
+    # D_B and its inverse (for indices in B)
+    if B is None:
+        _, _, P = qr(A.T, pivoting=True)
+        B = P[:m]
+    B = np.asarray(B, dtype=np.intp).ravel()
+    if B.size != m:
+        raise ValueError("B must have exactly m column indices")
+
+    x_B = x[B]
+    s_B = s[B]
+    d_B_inv = np.sqrt(s_B / x_B)  # 1 / (sqrt(x_B/s_B))
+
+    A_B = A[:, B]
+    A_B_inv = np.linalg.solve(A_B, np.eye(m))
+
+    # M = A D^2 A^T
+    D2 = np.diag(d2)
+    M = A @ D2 @ A.T
+
+    # ω = A D^2 c - M y - σμ A S^{-1} 1 + b - A x
+    S_inv_one = 1.0 / s
+    omega = (
+        A @ (d2 * c)
+        - M @ y
+        - (sigma * mu) * (A @ S_inv_one)
+        + b
+        - A @ x
+    )
+
+    # M̂ = D_B^{-1} A_B^{-1} M (A_B^{-1})^T D_B^{-1}
+    D_B_inv = np.diag(d_B_inv)
+    inner = A_B_inv @ M @ A_B_inv.T
+    M_hat = D_B_inv @ inner @ D_B_inv
+
+    # ω̂ = D_B^{-1} A_B^{-1} ω
+    omega_hat = D_B_inv @ (A_B_inv @ omega)
+
+    return M_hat, omega_hat

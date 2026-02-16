@@ -52,9 +52,9 @@ def build_modified_nes(
     omega_hat : (m,) array
         RHS in (12).
     """
-    A = np.asarray(A) if not isinstance(A, np.ndarray) else A
     if isinstance(A, spmatrix):
         A = A.toarray()
+    A = np.asarray(A) if not isinstance(A, np.ndarray) else A
     A = np.atleast_2d(A)
     b = np.asarray(b, dtype=np.float64).ravel()
     c = np.asarray(c, dtype=np.float64).ravel()

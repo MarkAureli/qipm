@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Benchmark LP instances: (A,b,c) from .sde if present else .std; initial triple from .init; compute gate counts for qipm1/2/3 and write .qipm1/.qipm2/.qipm3."""
+"""Benchmark LP instances: (A,b,c) from .sde if present else .std; initial triple from .init; compute gate counts for qipm1/2/3 and write to instance .data (JSON)."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -26,7 +27,7 @@ def _gate_count_qipm1(
     if x_init is None or y_init is None or s_init is None:
         raise ValueError("qipm1 requires initial triple (x_init, y_init, s_init) from .init")
     M_hat, omega_hat = build_modified_nes(A, b, c, x_init, y_init, s_init, mu=1.0)
-    return gate_count_qlsa(M_hat) + gate_count_state_preparation(omega_hat)
+    return gate_count_qlsa(M_hat, omega_hat) + gate_count_state_preparation(omega_hat)
 
 
 def _gate_count_qipm2(
@@ -83,7 +84,7 @@ def _benchmark_instance_from_path(
     path: Path,
     qipm_numbers: list[int] | None = None,
 ) -> None:
-    """Load (A, b, c) from .sde if present else .std; load initial triple from .init; compute gate counts, write .qipm1/.qipm2/.qipm3. path must be .std or .sde."""
+    """Load (A, b, c) from .sde if present else .std; load initial triple from .init; compute gate counts, write to instance .data (JSON). path must be .std or .sde."""
     path = path.resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Instance file not found: {path}")
@@ -113,10 +114,17 @@ def _benchmark_instance_from_path(
     else:
         x_init, y_init, s_init = None, None, None
 
+    data_path = base.with_suffix(".data")
+    if data_path.exists():
+        data = json.loads(data_path.read_text())
+    else:
+        data = {}
+
     for n in numbers:
         count = _GATE_COUNT_FUNCS[n](A, b, c, x_init, y_init, s_init)
-        out_path = base.with_suffix(f".qipm{n}")
-        out_path.write_text(f"{count}\n")
+        data[f"gate_count_qipm{n}"] = count
+
+    data_path.write_text(json.dumps(data, indent=None))
 
 
 def benchmark_instance(
@@ -127,7 +135,7 @@ def benchmark_instance(
 ) -> None:
     """Run gate-count benchmark for the instance in cache_dir/instance_class/instance_name/.
 
-    Discovers the instance by .sde if present (exactly one), else by .std (exactly one). Loads (A,b,c) from that file and initial triple from .init; writes .qipm1/.qipm2/.qipm3 next to it.
+    Discovers the instance by .sde if present (exactly one), else by .std (exactly one). Loads (A,b,c) from that file and initial triple from .init; writes gate counts to instance .data (JSON).
     instance_class: e.g. "netlib", "miplib".
     instance_name: subfolder name (instance stem).
     cache_dir: root containing instance-class subfolders; defaults to "cache_dir".
@@ -202,7 +210,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Benchmark .std LP instances: compute qipm gate counts and write to .qipm1/.qipm2/.qipm3.",
+        description="Benchmark LP instances: compute qipm gate counts and write to instance .data (JSON).",
     )
     parser.add_argument(
         "instance_classes",

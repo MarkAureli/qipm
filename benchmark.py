@@ -27,6 +27,11 @@ def _gate_count_qipm1(
     if x_init is None or y_init is None or s_init is None:
         raise ValueError("qipm1 requires initial triple (x_init, y_init, s_init) from .init")
     M_hat, omega_hat = build_modified_nes(A, b, c, x_init, y_init, s_init, mu=1.0)
+    norm = np.linalg.norm(M_hat, 2)
+    if norm <= 0:
+        raise ValueError("spectral norm of M_hat is zero")
+    M_hat = M_hat / norm
+    omega_hat = omega_hat / norm
     return gate_count_qlsa(M_hat, omega_hat) + gate_count_state_preparation(omega_hat)
 
 

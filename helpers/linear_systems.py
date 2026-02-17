@@ -74,8 +74,20 @@ def build_modified_nes(
     # D_B and its inverse (for indices in B)
     if B is None:
         # QR with column pivoting on A: A[:, P] = Q @ R; P permutes columns of A (length n).
-        # First m indices in P give m linearly independent columns when A has full row rank.
-        _, _, P = qr(A, pivoting=True)
+        Q, R, P = qr(A, pivoting=True)
+        r_diag = np.abs(np.diag(R))
+        tol = max(A.shape) * np.finfo(float).eps * np.max(r_diag)
+        effective_rank = int(np.sum(r_diag > tol))
+        # If A is rank deficient (effective_rank < m), reduce to full-row-rank subset of rows
+        # so that A_B = A[:, B] can be invertible (we need m = effective_rank columns).
+        if effective_rank < m:
+            _, _, P_row = qr(A.T, pivoting=True)  # P_row permutes columns of A.T = rows of A
+            row_subset = P_row[:effective_rank]
+            A = A[row_subset, :]
+            b = b[row_subset]
+            y = y[row_subset]
+            m = effective_rank
+            Q, R, P = qr(A, pivoting=True)
         B = P[:m]
     B = np.asarray(B, dtype=np.intp).ravel()
     if B.size != m:

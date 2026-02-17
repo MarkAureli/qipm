@@ -8,4 +8,4 @@ import numpy as np
 
 def gate_count_state_preparation(v: np.ndarray) -> int:
     """Return gate count for state preparation of the given vector. Not yet implemented."""
-    raise NotImplementedError
+    raise 1  # not implemented yet

@@ -3,20 +3,18 @@
 
 from __future__ import annotations
 
+import math
 import numpy as np
 
 
 #######################################################################################################################
 #                                                       QLS Chebyshev
 #######################################################################################################################
-def qls_chebyshev_queries(
-    alpha: float, x_norm: float, d: int, k: float, epsilon: float
-) -> int:
+def qls_chebyshev_queries(x_norm: float, d: int, k: float, epsilon: float) -> int:
     """
     Compute the number of queries that QLS Chebyshev makes to O_H and O_F (P_A).
 
     Args:
-        alpha (float): Parameter used to compute the success probabilities p and p0.
         x_norm (float): Norm of the solution vector.
         d (int): Maximum sparsity.
         k (float): Condition number.
@@ -25,46 +23,40 @@ def qls_chebyshev_queries(
     Returns:
         int: The number of queries that QLS Chebyshev makes to O_H and O_F (P_A).
     """
-    p0 = 1 / alpha ** 2
-    p = (x_norm / alpha) ** 2
-
-    j0inst = j0(d * k, epsilon)
-    QPa = 8 * j0inst
-
-    return int(amplitude_amplification(p, p0) * QPa)
-
-
-def compute_alpha_qls_chebyshev(d: int, k: float, epsilon: float) -> float:
-    """
-    Compute the alpha parameter for QLS-Chebyshev.
-
-    Args:
-        d (int): Maximum sparsity per row/column.
-        k (float): Condition number.
-        epsilon (float): Precision.
-
-    Returns:
-        float: Computed alpha parameter.
-    """
     log_term = np.log2(d * k / epsilon)
 
+    j0_val = j0(d * k, epsilon)
+    max_safe_j0 = 10**7
+    if j0_val > max_safe_j0:
+        j0_val = max_safe_j0
+    if j0_val <= 0:
+        j0_val = 1
+    # Cap s to avoid overflow; compute initial product via Gamma(s+0.5)/(sqrt(pi)*Gamma(s+1)) = prod_{i=0}^{s-1} (s-0.5-i)/(s-i)
     s = int(np.ceil(log_term * (d * k) ** 2))
-    j0_val = int(
-        np.ceil(
-            d * k * np.sqrt(log_term * np.log2(log_term * 4 * (d * k) ** 2 / epsilon)),
-        )
+    max_safe_s = 10**7
+    if s > max_safe_s:
+        s = max_safe_s
+    if s <= 0:
+        s = 1
+    eta_i = math.exp(
+        math.lgamma(s + 0.5) - 0.5 * math.log(math.pi) - math.lgamma(s + 1)
     )
-
-    i_arr = np.arange(s)
-    eta_i = np.prod((s - 0.5 - i_arr) / (s - i_arr))
 
     alpha = 2 * (j0_val + 1) * (1 - eta_i) / d
 
-    for i in range(1, j0_val + 1):
-        eta_i *= (s - i + 1) / (s + i)
-        alpha -= 4 * (j0_val + 1 - i) * eta_i / d
+    if j0_val >= 1:
+        i_vals = np.arange(1, j0_val + 1, dtype=np.float64)
+        ratios = (s - i_vals + 1) / (s + i_vals)
+        eta_sequence = eta_i * np.cumprod(ratios)
+        alpha -= float(np.sum(4 * (j0_val + 1 - i_vals) * eta_sequence / d))
 
-    return alpha
+    p0 = 1 / alpha**2
+    p = (x_norm / alpha) ** 2
+
+    print(f"alpha: {alpha}, p0: {p0}, p: {p}, x_norm: {x_norm}")
+
+    QPa = 8 * j0_val
+    return int(amplitude_amplification(min(p, 1.0), min(p0, 1.0)) * QPa)
 
 
 #######################################################################################################################
@@ -72,11 +64,11 @@ def compute_alpha_qls_chebyshev(d: int, k: float, epsilon: float) -> float:
 #######################################################################################################################
 
 
-def j0(k: float, epsilon: float) -> float:
+def j0(k: float, epsilon: float) -> int:
     """Compute bound on j0 by computing a bound on b (binst)."""
-    binst = np.ceil(np.log(k / epsilon) * k ** 2)
-    insqrt = binst * np.log(4 * binst / epsilon)
-    return np.ceil(np.sqrt(insqrt))
+    binst = math.ceil(math.log(k / epsilon) * k**2)
+    insqrt = binst * math.log(4 * binst / epsilon)
+    return int(math.ceil(math.sqrt(insqrt)))
 
 
 def infinisum(f, start: int = 0, epsilon: float = 1e-1) -> float:
@@ -147,8 +139,8 @@ def amplitude_amplification(p: float, p0: float) -> float:
     Returns:
         float: The expected number of times quantum amplitude amplification is called.
     """
-    theta = np.arcsin(np.sqrt(p))
-    sin_2_theta = np.sin(2 * theta)
+    theta = math.asin(math.sqrt(p))
+    sin_2_theta = math.sin(2 * theta)
     p0_inv_sqrt = p0 ** (-0.5)
 
     def term(k: int) -> float:
@@ -193,5 +185,4 @@ def gate_count_qlsa(A: np.ndarray, b: np.ndarray, epsilon: float = 1e-1) -> int:
     x = np.linalg.solve(A, b)
     x_norm = float(np.linalg.norm(x))
 
-    alpha = compute_alpha_qls_chebyshev(d, k, epsilon)
-    return qls_chebyshev_queries(alpha, x_norm, d, k, epsilon)
+    return qls_chebyshev_queries(x_norm, d, k, epsilon)

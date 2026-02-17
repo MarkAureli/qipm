@@ -187,9 +187,9 @@ def selfdual_embedding(
     neg_I = -eye(n, format="csr")
     B2 = hstack([zeros_nn, col_c, -A_csr.T, neg_I, csr_matrix((n, 1))], format="csr")
 
-    # Row block 3 (1 row): [-c', 0, b', 0, 1]
-    row_c = csr_matrix(-c.reshape(1, -1))
-    row_b = csr_matrix(b.reshape(1, -1))
+    # Row block 3 (1 row): [c', 0, -b', 0, 1]  (literature convention)
+    row_c = csr_matrix(c.reshape(1, -1))
+    row_b = csr_matrix((-b).reshape(1, -1))
     row_zeros_n = csr_matrix((1, n))
     B3 = hstack(
         [row_c, csr_matrix([[0.0]]), row_b, row_zeros_n, csr_matrix([[1.0]])],

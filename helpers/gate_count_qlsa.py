@@ -26,37 +26,26 @@ def qls_chebyshev_queries(x_norm: float, d: int, k: float, epsilon: float) -> in
     log_term = np.log2(d * k / epsilon)
 
     j0_val = j0(d * k, epsilon)
-    max_safe_j0 = 10**7
-    if j0_val > max_safe_j0:
-        j0_val = max_safe_j0
-    if j0_val <= 0:
-        j0_val = 1
-    # Cap s to avoid overflow; compute initial product via Gamma(s+0.5)/(sqrt(pi)*Gamma(s+1)) = prod_{i=0}^{s-1} (s-0.5-i)/(s-i)
-    s = int(np.ceil(log_term * (d * k) ** 2))
-    max_safe_s = 10**7
-    if s > max_safe_s:
-        s = max_safe_s
-    if s <= 0:
-        s = 1
-    eta_i = math.exp(
-        math.lgamma(s + 0.5) - 0.5 * math.log(math.pi) - math.lgamma(s + 1)
-    )
+    # s = min(10**9, int(np.ceil(log_term * (d * k) ** 2)))
+    # eta_i = math.exp(
+    #     math.lgamma(s + 0.5) - 0.5 * math.log(math.pi) - math.lgamma(s + 1)
+    # )
 
-    alpha = 2 * (j0_val + 1) * (1 - eta_i) / d
+    # alpha = 2 * (j0_val + 1) * (1 - eta_i) / d
 
-    if j0_val >= 1:
-        i_vals = np.arange(1, j0_val + 1, dtype=np.float64)
-        ratios = (s - i_vals + 1) / (s + i_vals)
-        eta_sequence = eta_i * np.cumprod(ratios)
-        alpha -= float(np.sum(4 * (j0_val + 1 - i_vals) * eta_sequence / d))
+    # if j0_val >= 1:
+    #     i_vals = np.arange(1, j0_val + 1, dtype=np.float64)
+    #     ratios = (s - i_vals + 1) / (s + i_vals)
+    #     eta_sequence = eta_i * np.cumprod(ratios)
+    #     alpha -= float(np.sum(4 * (j0_val + 1 - i_vals) * eta_sequence / d))
 
-    p0 = 1 / alpha**2
-    p = (x_norm / alpha) ** 2
+    # p0 = 1 / alpha**2
+    # p = (x_norm / alpha) ** 2
 
-    print(f"alpha: {alpha}, p0: {p0}, p: {p}, x_norm: {x_norm}")
+    # print(f"alpha: {alpha}, p0: {p0}, p: {p}, x_norm: {x_norm}")
 
-    QPa = 8 * j0_val
-    return int(amplitude_amplification(min(p, 1.0), min(p0, 1.0)) * QPa)
+    return 8 * j0_val
+    # return int(amplitude_amplification(p, p0) * QPa)
 
 
 #######################################################################################################################
@@ -151,16 +140,25 @@ def amplitude_amplification(p: float, p0: float) -> float:
     return infinisum(term, start=1)
 
 
-def gate_count_qlsa(A: np.ndarray, b: np.ndarray, epsilon: float = 1e-1) -> int:
+def gate_count_qlsa(
+    A: np.ndarray,
+    b: np.ndarray,
+    *,
+    d: int,
+    k: float,
+    epsilon: float = 1e-1,
+) -> int:
     """
     Return the QLSA Chebyshev query count for the linear system A x = b.
 
-    Computes sparsity and condition number of A, solves A x = b for x_norm,
-    then returns the number of queries to O_H and O_F (P_A) as in qls_chebyshev_queries.
+    Uses the provided sparsity d and condition number k (e.g. from instance .data).
+    Solves A x = b for x_norm, then returns the number of queries as in qls_chebyshev_queries.
 
     Args:
         A: Square matrix of the linear system.
         b: Right-hand side vector.
+        d: Maximum sparsity (non-zeros per row or column) of A.
+        k: Condition number (2-norm) of A.
         epsilon: Precision (default 1e-1).
 
     Returns:
@@ -173,15 +171,6 @@ def gate_count_qlsa(A: np.ndarray, b: np.ndarray, epsilon: float = 1e-1) -> int:
     if b.size != A.shape[0]:
         raise ValueError("b size must match A shape")
 
-    # Maximum sparsity (non-zeros per row or column)
-    nz_row = np.count_nonzero(A, axis=1)
-    nz_col = np.count_nonzero(A, axis=0)
-    d = int(max(nz_row.max(), nz_col.max()))
-
-    # Condition number (2-norm)
-    k = float(np.linalg.cond(A))
-
-    # Solve A x = b and get ||x||
     x = np.linalg.solve(A, b)
     x_norm = float(np.linalg.norm(x))
 

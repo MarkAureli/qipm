@@ -15,6 +15,16 @@ from helpers.gate_count_state_prep import gate_count_state_preparation
 from helpers.linear_systems import build_modified_nes
 
 
+def _sparsity_and_cond(M: np.ndarray) -> tuple[int, float]:
+    """Return maximum sparsity (non-zeros per row/column) and 2-norm condition number of M."""
+    M = np.asarray(M)
+    nz_row = np.count_nonzero(M, axis=1)
+    nz_col = np.count_nonzero(M, axis=0)
+    d = int(max(nz_row.max(), nz_col.max()))
+    k = float(np.linalg.cond(M))
+    return d, 1
+
+
 def _gate_count_qipm1(
     A: csr_matrix,
     b: np.ndarray,
@@ -22,17 +32,23 @@ def _gate_count_qipm1(
     x_init: np.ndarray | None,
     y_init: np.ndarray | None,
     s_init: np.ndarray | None,
-) -> int:
-    """Return gate count for qipm1. Standard form: min c'x s.t. Ax = b, x >= 0. Requires initial triple (x_init, y_init, s_init) from .init."""
+) -> tuple[int, int, float]:
+    """Return (gate_count, sparsity, cond) for qipm1. Requires initial triple (x_init, y_init, s_init) from .init."""
     if x_init is None or y_init is None or s_init is None:
         raise ValueError("qipm1 requires initial triple (x_init, y_init, s_init) from .init")
     M_hat, omega_hat = build_modified_nes(A, b, c, x_init, y_init, s_init, mu=1.0)
+    d, k = _sparsity_and_cond(M_hat)
     norm = np.linalg.norm(M_hat, 2)
     if norm <= 0:
         raise ValueError("spectral norm of M_hat is zero")
     M_hat = M_hat / norm
     omega_hat = omega_hat / norm
-    return gate_count_qlsa(M_hat, omega_hat) + gate_count_state_preparation(omega_hat)
+    count = (
+        gate_count_qlsa(M_hat, omega_hat, d=d, k=k)
+        + gate_count_state_preparation(omega_hat)
+        + M_hat.shape[0]
+    )
+    return count, d, k
 
 
 def _gate_count_qipm2(
@@ -42,8 +58,8 @@ def _gate_count_qipm2(
     x_init: np.ndarray | None,
     y_init: np.ndarray | None,
     s_init: np.ndarray | None,
-) -> int:
-    """Return gate count for qipm2. Standard form: min c'x s.t. Ax = b, x >= 0. Requires initial triple (x_init, y_init, s_init) from .init."""
+) -> tuple[int, int, float]:
+    """Return (gate_count, sparsity, cond) for qipm2. Requires initial triple (x_init, y_init, s_init) from .init."""
     raise NotImplementedError
 
 
@@ -54,8 +70,8 @@ def _gate_count_qipm3(
     x_init: np.ndarray | None,
     y_init: np.ndarray | None,
     s_init: np.ndarray | None,
-) -> int:
-    """Return gate count for qipm3. Standard form: min c'x s.t. Ax = b, x >= 0. Requires initial triple (x_init, y_init, s_init) from .init."""
+) -> tuple[int, int, float]:
+    """Return (gate_count, sparsity, cond) for qipm3. Requires initial triple (x_init, y_init, s_init) from .init."""
     raise NotImplementedError
 
 
@@ -126,8 +142,10 @@ def _benchmark_instance_from_path(
         data = {}
 
     for n in numbers:
-        count = _GATE_COUNT_FUNCS[n](A, b, c, x_init, y_init, s_init)
+        count, sparsity, cond = _GATE_COUNT_FUNCS[n](A, b, c, x_init, y_init, s_init)
         data[f"gate_count_qipm{n}"] = count
+        data[f"sparsity_qipm{n}"] = sparsity
+        data[f"cond_qipm{n}"] = cond
 
     data_path.write_text(json.dumps(data, indent=None))
 

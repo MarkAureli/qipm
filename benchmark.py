@@ -22,7 +22,7 @@ def _sparsity_and_cond(M: np.ndarray) -> tuple[int, float]:
     nz_col = np.count_nonzero(M, axis=0)
     d = int(max(nz_row.max(), nz_col.max()))
     k = float(np.linalg.cond(M))
-    return d, 1
+    return d, k
 
 
 def _gate_count_qipm1(
@@ -113,9 +113,11 @@ def _benchmark_instance_from_path(
     if suf not in (".std", ".sde"):
         raise ValueError(f"Path must be .std or .sde; got {path.suffix!r}")
 
-    base = path.with_suffix("")
-    sde_path = base.with_suffix(".sde")
-    std_path = base.with_suffix(".std")
+    # Strip only the known extension so names with dots (e.g. clique "name.dimac_clq.std") stay correct
+    base_name = path.name[: -len(suf)]
+    base = path.parent / base_name
+    sde_path = path.parent / (base_name + ".sde")
+    std_path = path.parent / (base_name + ".std")
     lp_path = sde_path if sde_path.is_file() else std_path
     if not lp_path.is_file():
         raise FileNotFoundError(f"Neither {sde_path} nor {std_path} found")
@@ -129,13 +131,13 @@ def _benchmark_instance_from_path(
 
     A, b, c = _load_standard_form(lp_path)
 
-    init_path = base.with_suffix(".init")
+    init_path = path.parent / (base_name + ".init")
     if init_path.is_file():
         x_init, y_init, s_init = _load_init(init_path)
     else:
         x_init, y_init, s_init = None, None, None
 
-    data_path = base.with_suffix(".data")
+    data_path = path.parent / (base_name + ".data")
     if data_path.exists():
         data = json.loads(data_path.read_text())
     else:

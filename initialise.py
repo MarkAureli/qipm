@@ -143,8 +143,21 @@ def find_initial_triple(
     Raises if such a triple cannot be found.
     """
     m, n = A.shape
+    raise RuntimeError("Skip for testing purposes")
     y, s = _find_dual_feasible_strict(A, c)
     x = _find_primal_feasible_strict(A, b, n)
+    return x, y, s
+
+
+def _find_initial_triple_clique(
+    A: csr_matrix,
+    b: np.ndarray,
+    c: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Clique specialisation: x = 0.25 for all primal variables; (y, s) satisfy dual constraint s = c - A'y with s > 0."""
+    _, n = A.shape
+    x = np.full(n, 0.25, dtype=np.float64)
+    y, s = _find_dual_feasible_strict(A, c)
     return x, y, s
 
 
@@ -236,7 +249,10 @@ def _write_std_npz(path: Path, A: csr_matrix, b: np.ndarray, c: np.ndarray) -> N
         )
 
 
-def _initialise_instance_from_path(path: Path) -> None:
+def _initialise_instance_from_path(
+    path: Path,
+    instance_class: str | None = None,
+) -> None:
     """Load .std at path, find initial triple (x, y, s) with x > 0, s > 0, write .init (and optionally .sde) next to it."""
     path = path.resolve()
     if not path.is_file():
@@ -247,15 +263,18 @@ def _initialise_instance_from_path(path: Path) -> None:
     A, b, c = _load_standard_form(path)
     embedding_used = False
     emb_lp = None
-    try:
-        x, y, s = find_initial_triple(A, b, c)
-    except Exception:
-        result = selfdual_embedding(A, b, c)
-        embedding_used = True
-        if len(result) == 4:
-            x, y, s, emb_lp = result
-        else:
-            x, y, s = result
+    if instance_class == "clique":
+        x, y, s = _find_initial_triple_clique(A, b, c)
+    else:
+        try:
+            x, y, s = find_initial_triple(A, b, c)
+        except Exception:
+            result = selfdual_embedding(A, b, c)
+            embedding_used = True
+            if len(result) == 4:
+                x, y, s, emb_lp = result
+            else:
+                x, y, s = result
 
     out_path = path.with_suffix(".init")
     with open(out_path, "wb") as f:
@@ -294,7 +313,7 @@ def initialise_instance(
         raise FileNotFoundError(
             f"Expected exactly one .std in {instance_dir}; found {len(std_files)}"
         )
-    _initialise_instance_from_path(std_files[0])
+    _initialise_instance_from_path(std_files[0], instance_class=instance_class)
 
 
 def initialise_instance_class(

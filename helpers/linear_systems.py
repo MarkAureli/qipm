@@ -23,7 +23,7 @@ def build_modified_nes(
 
     Notation (paper): X = diag(x), S = diag(s), D = X^{1/2} S^{-1/2};
     M = A D^2 A^T; ω = A D^2 c - M y - σμ A S^{-1} 1 + b - A x.
-    Basis B ⊆ {0..n-1} with |B| = m s.t. A_B = A[:, B] is invertible.
+    Basis B ⊆ {0..n-1} with |B| = m s.t. A_B = A[:, B] is invertible (chosen via QR with column pivoting).
     Â = A_B^{-1} A, b̂ = A_B^{-1} b; D_B = diag(x_B)^{1/2} diag(s_B)^{-1/2}.
     Then:
       M̂ = D_B^{-1} A_B^{-1} M (D_B^{-1} A_B^{-1})^T,
@@ -43,7 +43,7 @@ def build_modified_nes(
     sigma : float
         Centering parameter (default 1.0).
     B : (m,) int array or None
-        Column indices for basis A_B. If None, chosen via QR with column pivoting on A.
+        Column indices for basis A_B. If None, chosen from A via QR with column pivoting.
 
     Returns
     -------
@@ -71,24 +71,20 @@ def build_modified_nes(
 
     # D^2 = X S^{-1} (diagonal)
     d2 = x / s  # shape (n,)
-    # D_B and its inverse (for indices in B)
     if B is None:
-        # QR with column pivoting on A: A[:, P] = Q @ R; P permutes columns of A (length n).
-        Q, R, P = qr(A, pivoting=True)
-        r_diag = np.abs(np.diag(R))
-        tol = max(A.shape) * np.finfo(float).eps * np.max(r_diag)
+        # Choose basis B via QR with column pivoting; reduce to full row rank if rank deficient
+        r_diag = np.abs(np.diag(qr(A, pivoting=True)[1]))
+        tol = max(A.shape) * np.finfo(float).eps * (np.max(r_diag) if r_diag.size else 1.0)
         effective_rank = int(np.sum(r_diag > tol))
-        # If A is rank deficient (effective_rank < m), reduce to full-row-rank subset of rows
-        # so that A_B = A[:, B] can be invertible (we need m = effective_rank columns).
         if effective_rank < m:
-            _, _, P_row = qr(A.T, pivoting=True)  # P_row permutes columns of A.T = rows of A
+            _, _, P_row = qr(A.T, pivoting=True)
             row_subset = P_row[:effective_rank]
             A = A[row_subset, :]
             b = b[row_subset]
             y = y[row_subset]
             m = effective_rank
-            Q, R, P = qr(A, pivoting=True)
-        B = P[:m]
+        _, _, P = qr(A, pivoting=True)
+        B = P[:m].copy()
     B = np.asarray(B, dtype=np.intp).ravel()
     if B.size != m:
         raise ValueError("B must have exactly m column indices")

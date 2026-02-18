@@ -17,7 +17,6 @@ def build_modified_nes(
     s: np.ndarray,
     mu: float | None = None,
     sigma: float = 1.0,
-    B: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Build M̂ and ω̂ from the modified NES (12): M̂ z = ω̂.
 
@@ -42,8 +41,6 @@ def build_modified_nes(
         Barrier parameter. If None, μ = x^T s / n.
     sigma : float
         Centering parameter (default 1.0).
-    B : (m,) int array or None
-        Column indices for basis A_B. If None, chosen from A via QR with column pivoting.
 
     Returns
     -------
@@ -71,23 +68,19 @@ def build_modified_nes(
 
     # D^2 = X S^{-1} (diagonal)
     d2 = x / s  # shape (n,)
-    if B is None:
-        # Choose basis B via QR with column pivoting; reduce to full row rank if rank deficient
-        r_diag = np.abs(np.diag(qr(A, pivoting=True)[1]))
-        tol = max(A.shape) * np.finfo(float).eps * (np.max(r_diag) if r_diag.size else 1.0)
-        effective_rank = int(np.sum(r_diag > tol))
-        if effective_rank < m:
-            _, _, P_row = qr(A.T, pivoting=True)
-            row_subset = P_row[:effective_rank]
-            A = A[row_subset, :]
-            b = b[row_subset]
-            y = y[row_subset]
-            m = effective_rank
-        _, _, P = qr(A, pivoting=True)
-        B = P[:m].copy()
-    B = np.asarray(B, dtype=np.intp).ravel()
-    if B.size != m:
-        raise ValueError("B must have exactly m column indices")
+    # Choose basis B via QR with column pivoting; reduce to full row rank if rank deficient
+    r_diag = np.abs(np.diag(qr(A, pivoting=True)[1]))
+    tol = max(A.shape) * np.finfo(float).eps * (np.max(r_diag) if r_diag.size else 1.0)
+    effective_rank = int(np.sum(r_diag > tol))
+    if effective_rank < m:
+        _, _, P_row = qr(A.T, pivoting=True)
+        row_subset = P_row[:effective_rank]
+        A = A[row_subset, :]
+        b = b[row_subset]
+        y = y[row_subset]
+        m = effective_rank
+    _, _, P = qr(A, pivoting=True)
+    B = np.asarray(P[:m].copy(), dtype=np.intp).ravel()
 
     x_B = x[B]
     s_B = s[B]

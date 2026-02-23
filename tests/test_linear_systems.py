@@ -1,13 +1,19 @@
-"""Tests for helpers/linear_systems.py: build_modified_nes.
+"""Tests for helpers/linear_systems.py: build_modified_nes and estimate_cond_mhat.
 
-Two test suites:
+Four test suites:
 1. Soundness: for each fixture (.sde + .init), verify that solving M̂ Δŷ = ω̂
    and recovering Δy = T^T Δŷ satisfies M Δy = ω (the two systems are equivalent).
 2. Condition number improvement: for each matrix in test_data/reduce_with_basis/,
    verify that the new basis (QR on A*d_sqrt) gives lower cond(M̂) than the old
    basis (QR on A).
+3. Sparse vs dense: for each fixture, verify that passing a CSR sparse matrix
+   produces identical M̂/ω̂ to passing a dense ndarray, and report wall-time for both.
+4. estimate_cond_mhat: verify that the LinearOperator/eigsh-based estimator agrees
+   with the exact eigvalsh condition number of M̂ on fixtures and test-data matrices,
+   and that sparse/dense inputs give identical results.
 """
 
+import time
 from pathlib import Path
 
 import numpy as np
@@ -15,7 +21,7 @@ import pytest
 from scipy.linalg import qr
 from scipy.sparse import csr_matrix
 
-from helpers.linear_systems import build_modified_nes
+from helpers.linear_systems import build_modified_nes, estimate_cond_mhat
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 TEST_DATA = Path(__file__).resolve().parent.parent / "test_data" / "reduce_with_basis"
@@ -186,4 +192,181 @@ def test_condition_number_improvement(npz_path: Path) -> None:
     assert cond_new <= cond_old * 10, (
         f"{npz_path.stem}: cond_new={cond_new:.4g} > cond_old={cond_old:.4g} * 10  "
         f"(new basis is worse by more than factor 10)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Sparse vs dense equivalence and timing tests
+# ---------------------------------------------------------------------------
+
+SPARSE_EQUIV_TOL = 1e-10
+
+
+@pytest.mark.parametrize("stem", FIXTURE_STEMS)
+@pytest.mark.parametrize("reduce_with_basis", [True, False], ids=["reduced", "unreduced"])
+def test_sparse_matches_dense(stem: str, reduce_with_basis: bool) -> None:
+    """Sparse CSR input produces the same M̂ and ω̂ as dense ndarray input.
+
+    Since the sparse path uses the same deterministic column-pivoted QR for basis
+    selection (just avoids the n×n dense D² matrix), the outputs must agree to
+    floating-point precision.
+    """
+    sde_path = FIXTURES / f"{stem}.sde"
+    init_path = FIXTURES / f"{stem}.init"
+    if not sde_path.is_file() or not init_path.is_file():
+        pytest.skip(f"Fixture not found: {stem}")
+
+    A_dense, b, c = _load_std(sde_path)
+    A_sparse = csr_matrix(A_dense)
+    x, y, s = _load_init(init_path)
+
+    M_dense, rhs_dense = build_modified_nes(
+        A_dense, b, c, x, y, s, reduce_with_basis=reduce_with_basis
+    )
+    M_sparse, rhs_sparse = build_modified_nes(
+        A_sparse, b, c, x, y, s, reduce_with_basis=reduce_with_basis
+    )
+
+    np.testing.assert_allclose(
+        M_sparse,
+        M_dense,
+        rtol=1e-8,
+        atol=SPARSE_EQUIV_TOL,
+        err_msg=f"{stem} (reduce={reduce_with_basis}): matrix mismatch between sparse and dense paths",
+    )
+    np.testing.assert_allclose(
+        rhs_sparse,
+        rhs_dense,
+        rtol=1e-8,
+        atol=SPARSE_EQUIV_TOL,
+        err_msg=f"{stem} (reduce={reduce_with_basis}): rhs mismatch between sparse and dense paths",
+    )
+
+
+_TIMING_REPS = 50
+
+
+@pytest.mark.parametrize("stem", FIXTURE_STEMS)
+def test_sparse_timing(stem: str) -> None:
+    """Report wall-time for dense vs sparse build_modified_nes on fixture instances.
+
+    The fixture instances are tiny so absolute times are not meaningful; this test
+    serves as a timing harness and documents the overhead profile. No timing
+    assertion is made — for large instances the sparse path is expected to be
+    significantly faster due to avoiding the n×n dense diagonal matrix D².
+    """
+    sde_path = FIXTURES / f"{stem}.sde"
+    init_path = FIXTURES / f"{stem}.init"
+    if not sde_path.is_file() or not init_path.is_file():
+        pytest.skip(f"Fixture not found: {stem}")
+
+    A_dense, b, c = _load_std(sde_path)
+    A_sparse = csr_matrix(A_dense)
+    x, y, s = _load_init(init_path)
+
+    # Warm up (avoid cold-start JIT / import effects)
+    build_modified_nes(A_dense, b, c, x, y, s)
+    build_modified_nes(A_sparse, b, c, x, y, s)
+
+    t0 = time.perf_counter()
+    for _ in range(_TIMING_REPS):
+        build_modified_nes(A_dense, b, c, x, y, s)
+    t_dense = (time.perf_counter() - t0) / _TIMING_REPS
+
+    t0 = time.perf_counter()
+    for _ in range(_TIMING_REPS):
+        build_modified_nes(A_sparse, b, c, x, y, s)
+    t_sparse = (time.perf_counter() - t0) / _TIMING_REPS
+
+    m, n = A_dense.shape
+    print(
+        f"\n{stem} (m={m}, n={n}): "
+        f"dense={t_dense * 1e3:.3f} ms, "
+        f"sparse={t_sparse * 1e3:.3f} ms, "
+        f"ratio={t_sparse / t_dense:.2f}x"
+    )
+    # Both paths must complete without error; no timing bound on tiny fixtures.
+    assert t_dense > 0 and t_sparse > 0
+
+
+# ---------------------------------------------------------------------------
+# estimate_cond_mhat tests
+# ---------------------------------------------------------------------------
+
+COND_MHAT_TOL = 0.01   # 1 % relative tolerance between estimate and eigvalsh
+
+
+@pytest.mark.parametrize("stem", FIXTURE_STEMS)
+def test_estimate_cond_mhat_fixtures(stem: str) -> None:
+    """estimate_cond_mhat agrees with eigvalsh(M̂) to within 1 % on all fixtures."""
+    sde_path = FIXTURES / f"{stem}.sde"
+    init_path = FIXTURES / f"{stem}.init"
+    if not sde_path.is_file() or not init_path.is_file():
+        pytest.skip(f"Fixture not found: {stem}")
+
+    A_dense, b, c = _load_std(sde_path)
+    x, y, s = _load_init(init_path)
+
+    M_hat, _ = build_modified_nes(A_dense, b, c, x, y, s)
+    lam = np.linalg.eigvalsh(M_hat)
+    kappa_exact = float(lam[-1] / lam[0]) if lam[0] > 0 else float("inf")
+
+    kappa_est = estimate_cond_mhat(A_dense, x, s)
+    rel_err = abs(kappa_est - kappa_exact) / max(kappa_exact, 1.0)
+    assert rel_err < COND_MHAT_TOL, (
+        f"{stem}: kappa_est={kappa_est:.4g}, kappa_exact={kappa_exact:.4g}, "
+        f"rel_err={rel_err:.2%}"
+    )
+
+
+@pytest.mark.parametrize(
+    "npz_path",
+    sorted(TEST_DATA.glob("A_*.npz")),
+    ids=lambda p: p.stem,
+)
+def test_estimate_cond_mhat_test_data(npz_path: Path) -> None:
+    """estimate_cond_mhat agrees with eigvalsh(M̂) on the reduce_with_basis matrices."""
+    if not npz_path.is_file():
+        pytest.skip(f"Test data file not found: {npz_path}")
+
+    rng = np.random.default_rng(42)
+    data = np.load(npz_path)
+    A = np.asarray(data["A"], dtype=np.float64)
+    m, n = A.shape
+
+    x = np.ones(n) + rng.uniform(0.0, 1.0, size=n)
+    s = np.ones(n) + rng.uniform(0.0, 1.0, size=n)
+    b = A @ x
+    y = np.zeros(m)
+    c = s
+
+    M_hat, _ = build_modified_nes(A, b, c, x, y, s)
+    lam = np.linalg.eigvalsh(M_hat)
+    kappa_exact = float(lam[-1] / lam[0]) if lam[0] > 0 else float("inf")
+
+    kappa_est = estimate_cond_mhat(A, x, s)
+    rel_err = abs(kappa_est - kappa_exact) / max(kappa_exact, 1.0)
+    assert rel_err < COND_MHAT_TOL, (
+        f"{npz_path.stem}: kappa_est={kappa_est:.4g}, kappa_exact={kappa_exact:.4g}, "
+        f"rel_err={rel_err:.2%}"
+    )
+
+
+@pytest.mark.parametrize("stem", FIXTURE_STEMS)
+def test_estimate_cond_mhat_sparse_matches_dense(stem: str) -> None:
+    """estimate_cond_mhat gives the same result for sparse CSR and dense ndarray input."""
+    sde_path = FIXTURES / f"{stem}.sde"
+    init_path = FIXTURES / f"{stem}.init"
+    if not sde_path.is_file() or not init_path.is_file():
+        pytest.skip(f"Fixture not found: {stem}")
+
+    A_dense, _, _ = _load_std(sde_path)
+    A_sparse = csr_matrix(A_dense)
+    x, y, s = _load_init(init_path)
+
+    kappa_dense = estimate_cond_mhat(A_dense, x, s)
+    kappa_sparse = estimate_cond_mhat(A_sparse, x, s)
+    rel_diff = abs(kappa_sparse - kappa_dense) / max(kappa_dense, 1.0)
+    assert rel_diff < COND_MHAT_TOL, (
+        f"{stem}: kappa_dense={kappa_dense:.4g}, kappa_sparse={kappa_sparse:.4g}"
     )

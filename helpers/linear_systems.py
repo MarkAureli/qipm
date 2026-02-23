@@ -258,21 +258,28 @@ def estimate_cond_mhat(
     m, n = A.shape
 
     # --- Basis selection: QR with column pivoting on A·diag(√(x/s)) ---
+    # For sparse A, use SuiteSparse SPQR (via sparseqr) to avoid the O(m×n) dense
+    # allocation that (A @ sp_diags(d_sqrt)).toarray() would require.  SPQR uses
+    # COLAMD/AMD column ordering instead of LAPACK DGEQP3, so the selected basis
+    # will differ from the dense path but is equally valid.
     d_sqrt = np.sqrt(x / s)
     if issparse(A):
-        A_scaled = (A @ sp_diags(d_sqrt, 0, format="csr")).toarray()
+        import sparseqr
+        A_scaled_sp = A @ sp_diags(d_sqrt, 0, format="csr")
+        _, _, basis_P, effective_rank = sparseqr.qr(A_scaled_sp)
+        basis_P = np.asarray(basis_P, dtype=np.intp)
     else:
         A_scaled = A * d_sqrt
-
-    _, R, basis_P = qr(A_scaled, pivoting=True)
-    r_diag = np.abs(np.diag(R))
-    tol_rank = max(A.shape) * np.finfo(float).eps * (r_diag[0] if r_diag.size else 1.0)
-    effective_rank = int(np.sum(r_diag > tol_rank))
+        _, R, basis_P = qr(A_scaled, pivoting=True)
+        r_diag = np.abs(np.diag(R))
+        tol_rank = max(A.shape) * np.finfo(float).eps * (r_diag[0] if r_diag.size else 1.0)
+        effective_rank = int(np.sum(r_diag > tol_rank))
 
     # --- Row reduction (consistent with build_modified_nes) ---
     if effective_rank < m:
         if issparse(A):
-            _, _, P_row = qr(A.toarray().T, pivoting=True)
+            _, _, P_row, _ = sparseqr.qr(A.T)
+            P_row = np.asarray(P_row, dtype=np.intp)
         else:
             _, _, P_row = qr(A.T, pivoting=True)
         row_subset = P_row[:effective_rank]
@@ -340,10 +347,18 @@ def estimate_cond_mhat(
         eigsh_kwargs["maxiter"] = maxiter
 
     lam_max, _ = eigsh(M_op, k=1, which="LM", **eigsh_kwargs)
-    lam_min, _ = eigsh(M_op, k=1, which="SM", **eigsh_kwargs)
-
     lam_max_val = float(lam_max[0])
-    lam_min_val = float(lam_min[0])
+
+    # When n_N < m, rank(F̄) ≤ n_N < m so F̄F̄ᵀ has a nullspace of dimension
+    # ≥ m − n_N and λ_min(M̂) = 1 exactly.  The SM eigsh would need to
+    # converge to an eigenvalue of exactly 1 amid many degenerate copies,
+    # which ARPACK reliably fails to do on large matrices.  Skip it.
+    if n_N < m:
+        lam_min_val = 1.0
+    else:
+        lam_min, _ = eigsh(M_op, k=1, which="SM", **eigsh_kwargs)
+        lam_min_val = float(lam_min[0])
+
     if lam_min_val <= 0.0:
         return float("inf")
     return lam_max_val / lam_min_val

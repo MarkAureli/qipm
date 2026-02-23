@@ -352,9 +352,48 @@ def test_estimate_cond_mhat_test_data(npz_path: Path) -> None:
     )
 
 
+def _build_mhat_for_spqr_basis(
+    A_dense: np.ndarray,
+    x: np.ndarray,
+    s: np.ndarray,
+) -> np.ndarray:
+    """Build M̂ explicitly using the SPQR (sparseqr) basis for testing purposes.
+
+    Mirrors the basis selection in estimate_cond_mhat's sparse path so the test
+    reference and the estimator use the same basis.
+    """
+    import sparseqr
+    from scipy.sparse import csr_matrix as csr, diags as sp_diags
+
+    A_sp = csr(A_dense)
+    m, n = A_sp.shape
+    d_sqrt = np.sqrt(x / s)
+    d2 = x / s
+    A_scaled_sp = A_sp @ sp_diags(d_sqrt, 0, format="csr")
+    _, _, basis_P, effective_rank = sparseqr.qr(A_scaled_sp)
+    basis_P = np.asarray(basis_P, dtype=np.intp)
+    B = basis_P[:effective_rank]
+    m = effective_rank
+    A_arr = A_dense[:m, :]  # row reduction not exercised in fixtures
+
+    d_B_inv = np.sqrt(s[B] / x[B])
+    D_B_inv = np.diag(d_B_inv)
+    A_B = A_arr[:, B]
+    A_B_inv = np.linalg.solve(A_B, np.eye(m))
+    M = A_arr @ np.diag(d2) @ A_arr.T
+    return D_B_inv @ (A_B_inv @ M @ A_B_inv.T) @ D_B_inv
+
+
 @pytest.mark.parametrize("stem", FIXTURE_STEMS)
 def test_estimate_cond_mhat_sparse_matches_dense(stem: str) -> None:
-    """estimate_cond_mhat gives the same result for sparse CSR and dense ndarray input."""
+    """estimate_cond_mhat with sparse CSR input is sound (κ ≥ 1).
+
+    The sparse path uses SuiteSparse SPQR (COLAMD/AMD ordering) while the dense path
+    uses LAPACK DGEQP3.  The two paths select different bases and can produce
+    substantially different M̂ matrices, so only soundness is asserted here.
+    Accuracy of the sparse eigsh estimate is verified in
+    test_estimate_cond_mhat_sparse_accuracy.
+    """
     sde_path = FIXTURES / f"{stem}.sde"
     init_path = FIXTURES / f"{stem}.init"
     if not sde_path.is_file() or not init_path.is_file():
@@ -364,9 +403,38 @@ def test_estimate_cond_mhat_sparse_matches_dense(stem: str) -> None:
     A_sparse = csr_matrix(A_dense)
     x, y, s = _load_init(init_path)
 
-    kappa_dense = estimate_cond_mhat(A_dense, x, s)
     kappa_sparse = estimate_cond_mhat(A_sparse, x, s)
-    rel_diff = abs(kappa_sparse - kappa_dense) / max(kappa_dense, 1.0)
-    assert rel_diff < COND_MHAT_TOL, (
-        f"{stem}: kappa_dense={kappa_dense:.4g}, kappa_sparse={kappa_sparse:.4g}"
+
+    assert np.isfinite(kappa_sparse), f"{stem}: kappa_sparse={kappa_sparse} is not finite"
+    assert kappa_sparse >= 1.0 - 1e-6, (
+        f"{stem}: kappa_sparse={kappa_sparse:.4g} < 1 (λ_min(M̂) ≥ 1 violated)"
+    )
+
+
+@pytest.mark.parametrize("stem", FIXTURE_STEMS)
+def test_estimate_cond_mhat_sparse_accuracy(stem: str) -> None:
+    """eigsh estimate for the SPQR-selected basis agrees with eigvalsh(M̂_SPQR) within 1%.
+
+    Builds M̂ explicitly for the same SPQR basis that estimate_cond_mhat uses,
+    computes the exact condition number via eigvalsh, and checks the eigsh-based
+    estimator agrees to within COND_MHAT_TOL.
+    """
+    sde_path = FIXTURES / f"{stem}.sde"
+    init_path = FIXTURES / f"{stem}.init"
+    if not sde_path.is_file() or not init_path.is_file():
+        pytest.skip(f"Fixture not found: {stem}")
+
+    A_dense, _, _ = _load_std(sde_path)
+    A_sparse = csr_matrix(A_dense)
+    x, y, s = _load_init(init_path)
+
+    M_hat_spqr = _build_mhat_for_spqr_basis(A_dense, x, s)
+    lam = np.linalg.eigvalsh(M_hat_spqr)
+    kappa_exact = float(lam[-1] / lam[0]) if lam[0] > 0 else float("inf")
+
+    kappa_est = estimate_cond_mhat(A_sparse, x, s)
+    rel_err = abs(kappa_est - kappa_exact) / max(kappa_exact, 1.0)
+    assert rel_err < COND_MHAT_TOL, (
+        f"{stem}: kappa_est={kappa_est:.4g}, kappa_exact(SPQR basis)={kappa_exact:.4g}, "
+        f"rel_err={rel_err:.2%}"
     )

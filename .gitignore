@@ -19,6 +19,10 @@ dist/
 .idea/
 .vscode/
 .cursor/
+.claude/
+
+# Claude Code
+CLAUDE.md
 *.swp
 *.swo
 

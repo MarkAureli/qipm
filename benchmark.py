@@ -16,12 +16,18 @@ from helpers.linear_systems import build_modified_nes
 
 
 def _sparsity_and_cond(M: np.ndarray) -> tuple[int, float]:
-    """Return maximum sparsity (non-zeros per row/column) and 2-norm condition number of M."""
+    """Return maximum sparsity (non-zeros per row/column) and 2-norm condition number of M.
+
+    Uses eigvalsh (symmetric eigenvalues, no eigenvectors) rather than the full SVD
+    used by np.linalg.cond. M_hat is symmetric by construction, so eigvalsh is exact
+    and ~2x faster at m≈2700 (LAPACK dsyevd vs dgesdd).
+    """
     M = np.asarray(M)
     nz_row = np.count_nonzero(M, axis=1)
     nz_col = np.count_nonzero(M, axis=0)
     d = int(max(nz_row.max(), nz_col.max()))
-    k = float(np.linalg.cond(M))
+    lam = np.linalg.eigvalsh(M)
+    k = float(lam[-1] / lam[0]) if lam[0] > 0 else float("inf")
     return d, k
 
 

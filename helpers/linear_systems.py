@@ -23,7 +23,7 @@ def build_modified_nes(
 
     Notation (paper): X = diag(x), S = diag(s), D = X^{1/2} S^{-1/2};
     M = A D^2 A^T; ω = A D^2 c - M y - σμ A S^{-1} 1 + b - A x.
-    Basis B ⊆ {0..n-1} with |B| = m s.t. A_B = A[:, B] is invertible (chosen via QR with column pivoting).
+    Basis B ⊆ {0..n-1} with |B| = m s.t. A_B = A[:, B] is invertible (chosen via QR with column pivoting on the scaled A D, where D = diag(sqrt(x/s))).
     Â = A_B^{-1} A, b̂ = A_B^{-1} b; D_B = diag(x_B)^{1/2} diag(s_B)^{-1/2}.
     Then:
       M̂ = D_B^{-1} A_B^{-1} M (D_B^{-1} A_B^{-1})^T,
@@ -71,10 +71,16 @@ def build_modified_nes(
     if mu is None:
         mu = float(np.dot(x, s)) / n
 
+    # M = A D^2 A^T, ω = A D^2 c - M y - σμ A S^{-1} 1 + b - A x (single place)
+    d2 = x / s
+
     basis_P = None  # column permutation from first QR when reduce_with_basis
     if reduce_with_basis:
-        # Reduce to full row rank if rank deficient; keep column perm P for basis
-        _, R, basis_P = qr(A, pivoting=True)
+        # Reduce to full row rank if rank deficient; keep column perm P for basis.
+        # QR on scaled A*d_sqrt selects a basis aligned with M = A D² Aᵀ,
+        # minimising κ(M̂) compared to QR on unscaled A.
+        d_sqrt = np.sqrt(d2)
+        _, R, basis_P = qr(A * d_sqrt, pivoting=True)
         r_diag = np.abs(np.diag(R))
         tol = max(A.shape) * np.finfo(float).eps * (np.max(r_diag) if r_diag.size else 1.0)
         effective_rank = int(np.sum(r_diag > tol))
@@ -85,9 +91,6 @@ def build_modified_nes(
             b = b[row_subset]
             y = y[row_subset]
             m = effective_rank
-
-    # M = A D^2 A^T, ω = A D^2 c - M y - σμ A S^{-1} 1 + b - A x (single place)
-    d2 = x / s
     D2 = np.diag(d2)
     S_inv_one = 1.0 / s
     M = A @ D2 @ A.T

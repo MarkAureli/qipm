@@ -12,15 +12,7 @@ from tqdm import tqdm
 
 from helpers.gate_count_qlsa import gate_count_qlsa
 from helpers.gate_count_state_prep import gate_count_state_preparation
-from helpers.linear_systems import build_modified_nes, estimate_cond_mhat
-
-
-def _sparsity(M: np.ndarray) -> int:
-    """Return maximum number of non-zeros in any row or column of M."""
-    M = np.asarray(M)
-    nz_row = np.count_nonzero(M, axis=1)
-    nz_col = np.count_nonzero(M, axis=0)
-    return int(max(nz_row.max(), nz_col.max()))
+from helpers.linear_systems import estimate_cond_mhat
 
 
 def _gate_count_qipm1(
@@ -34,18 +26,13 @@ def _gate_count_qipm1(
     """Return (gate_count, sparsity, cond) for qipm1. Requires initial triple (x_init, y_init, s_init) from .init."""
     if x_init is None or y_init is None or s_init is None:
         raise ValueError("qipm1 requires initial triple (x_init, y_init, s_init) from .init")
-    M_hat, omega_hat = build_modified_nes(A, b, c, x_init, y_init, s_init, mu=1.0)
-    d = _sparsity(M_hat)
+    m = A.shape[0]
+    d = m  # M̂ = I + F̄F̄ᵀ is generically dense: d = m for LP instances
     k = estimate_cond_mhat(A, x_init, s_init)
-    norm = np.linalg.norm(M_hat, 2)
-    if norm <= 0:
-        raise ValueError("spectral norm of M_hat is zero")
-    M_hat = M_hat / norm
-    omega_hat = omega_hat / norm
     count = (
         gate_count_qlsa(d=d, k=k)
-        + gate_count_state_preparation(omega_hat)
-        + M_hat.shape[0]
+        + gate_count_state_preparation(np.arange(1.0, m + 1))
+        + m
     )
     return count, d, k
 

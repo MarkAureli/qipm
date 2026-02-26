@@ -148,6 +148,9 @@ def _lp_to_standard_form(
             col_list.append(j_slack)
             val_list.append(-1.0)
             b_list.append(lo - row_constant[i])
+        elif lo <= -inf and hi >= inf:
+            # Fully free row: no constraint, skip entirely.
+            pass
         else:
             j_slack = add_var(0.0)
             row_list.append(i)

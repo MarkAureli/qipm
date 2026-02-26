@@ -12,7 +12,7 @@ from tqdm import tqdm
 
 from helpers.gate_count_qlsa import gate_count_qlsa
 from helpers.gate_count_state_prep import gate_count_state_preparation
-from helpers.linear_systems import estimate_cond_mhat
+from helpers.linear_systems import estimate_mnes_cond
 
 
 def _gate_count_qipm1(
@@ -28,7 +28,7 @@ def _gate_count_qipm1(
         raise ValueError("qipm1 requires initial triple (x_init, y_init, s_init) from .init")
     m = A.shape[0]
     d = m  # M̂ = I + F̄F̄ᵀ is generically dense: d = m for LP instances
-    k = estimate_cond_mhat(A, x_init, s_init)
+    k = estimate_mnes_cond(A, x_init, s_init)
     count = (
         gate_count_qlsa(d=d, k=k)
         + gate_count_state_preparation(np.arange(1.0, m + 1))

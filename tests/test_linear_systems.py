@@ -1,4 +1,4 @@
-"""Tests for helpers/linear_systems.py: build_modified_nes and estimate_cond_mhat.
+"""Tests for helpers/linear_systems.py (estimate_mnes_cond) and test-local build_modified_nes.
 
 Four test suites:
 1. Soundness: for each fixture (.sde + .init), verify that solving M̂ Δŷ = ω̂
@@ -8,7 +8,7 @@ Four test suites:
    basis (QR on A).
 3. Sparse vs dense: for each fixture, verify that passing a CSR sparse matrix
    produces identical M̂/ω̂ to passing a dense ndarray, and report wall-time for both.
-4. estimate_cond_mhat: verify that the LinearOperator/eigsh-based estimator agrees
+4. estimate_mnes_cond: verify that the LinearOperator/eigsh-based estimator agrees
    with the exact eigvalsh condition number of M̂ on fixtures and test-data matrices,
    and that sparse/dense inputs give identical results.
 """
@@ -19,9 +19,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 from scipy.linalg import qr
-from scipy.sparse import csr_matrix
+from scipy.sparse import csr_matrix, diags as sp_diags, spmatrix
 
-from helpers.linear_systems import build_modified_nes, estimate_cond_mhat
+from helpers.linear_systems import estimate_mnes_cond
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 TEST_DATA = Path(__file__).resolve().parent.parent / "test_data" / "reduce_with_basis"
@@ -88,6 +88,145 @@ def _m_hat_old_basis(A: np.ndarray, x: np.ndarray, s: np.ndarray) -> np.ndarray:
     M = A @ np.diag(d2) @ A.T
     inner = A_B_inv @ M @ A_B_inv.T
     return D_B_inv @ inner @ D_B_inv
+
+
+def _build_modified_nes_sparse(
+    A: spmatrix,
+    b: np.ndarray,
+    c: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    s: np.ndarray,
+    mu: float,
+    sigma: float,
+    reduce_with_basis: bool,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Sparse path for build_modified_nes (used in tests only)."""
+    A = csr_matrix(A, dtype=np.float64)
+    m, n = A.shape
+    d2 = x / s
+
+    basis_P = None
+    if reduce_with_basis:
+        d_sqrt = np.sqrt(d2)
+        A_scaled = (A @ sp_diags(d_sqrt, 0, format="csr")).toarray()
+        _, R, basis_P = qr(A_scaled, pivoting=True)
+        r_diag = np.abs(np.diag(R))
+        tol = max(A.shape) * np.finfo(float).eps * (np.max(r_diag) if r_diag.size else 1.0)
+        effective_rank = int(np.sum(r_diag > tol))
+        if effective_rank < m:
+            _, _, P_row = qr(A.toarray().T, pivoting=True)
+            row_subset = P_row[:effective_rank]
+            A = A[row_subset, :]
+            b = b[row_subset]
+            y = y[row_subset]
+            m = effective_rank
+
+    A_d2 = A @ sp_diags(d2, 0, format="csr")
+    M = (A_d2 @ A.T).toarray()
+
+    omega = (
+        np.asarray(A @ (d2 * c)).ravel()
+        - M @ y
+        - (sigma * mu) * np.asarray(A @ (1.0 / s)).ravel()
+        + b
+        - np.asarray(A @ x).ravel()
+    )
+
+    if not reduce_with_basis:
+        return M, omega
+
+    B = np.asarray(basis_P[:m], dtype=np.intp).ravel()
+    x_B, s_B = x[B], s[B]
+    d_B_inv = np.sqrt(s_B / x_B)
+    D_B_inv = np.diag(d_B_inv)
+    A_B = A[:, B].toarray()
+    A_B_inv = np.linalg.solve(A_B, np.eye(m))
+    inner = A_B_inv @ M @ A_B_inv.T
+    M_hat = D_B_inv @ inner @ D_B_inv
+    omega_hat = D_B_inv @ (A_B_inv @ omega)
+    return M_hat, omega_hat
+
+
+def build_modified_nes(
+    A: np.ndarray | spmatrix,
+    b: np.ndarray,
+    c: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    s: np.ndarray,
+    mu: float | None = None,
+    sigma: float = 1.0,
+    reduce_with_basis: bool = True,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build M̂ and ω̂ from the modified NES (12): M̂ z = ω̂.
+
+    Used in tests as the ground-truth M̂ to validate estimate_mnes_cond and
+    to test soundness of the congruence transformation.
+    """
+    b = np.asarray(b, dtype=np.float64).ravel()
+    c = np.asarray(c, dtype=np.float64).ravel()
+    x = np.asarray(x, dtype=np.float64).ravel()
+    y = np.asarray(y, dtype=np.float64).ravel()
+    s = np.asarray(s, dtype=np.float64).ravel()
+
+    if isinstance(A, spmatrix):
+        m, n = A.shape
+    else:
+        A = np.asarray(A) if not isinstance(A, np.ndarray) else A
+        A = np.atleast_2d(A)
+        m, n = A.shape
+
+    if b.size != m or c.size != n or x.size != n or s.size != n or y.size != m:
+        raise ValueError("A (m,n), b (m), c (n), x (n), y (m), s (n) size mismatch")
+
+    if mu is None:
+        mu = float(np.dot(x, s)) / n
+
+    if isinstance(A, spmatrix):
+        return _build_modified_nes_sparse(A, b, c, x, y, s, mu, sigma, reduce_with_basis)
+
+    d2 = x / s
+
+    basis_P = None
+    if reduce_with_basis:
+        d_sqrt = np.sqrt(d2)
+        _, R, basis_P = qr(A * d_sqrt, pivoting=True)
+        r_diag = np.abs(np.diag(R))
+        tol = max(A.shape) * np.finfo(float).eps * (np.max(r_diag) if r_diag.size else 1.0)
+        effective_rank = int(np.sum(r_diag > tol))
+        if effective_rank < m:
+            _, _, P_row = qr(A.T, pivoting=True)
+            row_subset = P_row[:effective_rank]
+            A = A[row_subset, :]
+            b = b[row_subset]
+            y = y[row_subset]
+            m = effective_rank
+    D2 = np.diag(d2)
+    S_inv_one = 1.0 / s
+    M = A @ D2 @ A.T
+    omega = (
+        A @ (d2 * c)
+        - M @ y
+        - (sigma * mu) * (A @ S_inv_one)
+        + b
+        - A @ x
+    )
+
+    if reduce_with_basis:
+        B = np.asarray(basis_P[:m].copy(), dtype=np.intp).ravel()
+        x_B = x[B]
+        s_B = s[B]
+        d_B_inv = np.sqrt(s_B / x_B)
+        A_B = A[:, B]
+        A_B_inv = np.linalg.solve(A_B, np.eye(m))
+        D_B_inv = np.diag(d_B_inv)
+        inner = A_B_inv @ M @ A_B_inv.T
+        M_hat = D_B_inv @ inner @ D_B_inv
+        omega_hat = D_B_inv @ (A_B_inv @ omega)
+        return M_hat, omega_hat
+    else:
+        return M, omega
 
 
 # ---------------------------------------------------------------------------
@@ -290,15 +429,15 @@ def test_sparse_timing(stem: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# estimate_cond_mhat tests
+# estimate_mnes_cond tests
 # ---------------------------------------------------------------------------
 
 COND_MHAT_TOL = 0.01   # 1 % relative tolerance between estimate and eigvalsh
 
 
 @pytest.mark.parametrize("stem", FIXTURE_STEMS)
-def test_estimate_cond_mhat_fixtures(stem: str) -> None:
-    """estimate_cond_mhat agrees with eigvalsh(M̂) to within 1 % on all fixtures."""
+def test_estimate_mnes_cond_fixtures(stem: str) -> None:
+    """estimate_mnes_cond agrees with eigvalsh(M̂) to within 1 % on all fixtures."""
     sde_path = FIXTURES / f"{stem}.sde"
     init_path = FIXTURES / f"{stem}.init"
     if not sde_path.is_file() or not init_path.is_file():
@@ -311,7 +450,7 @@ def test_estimate_cond_mhat_fixtures(stem: str) -> None:
     lam = np.linalg.eigvalsh(M_hat)
     kappa_exact = float(lam[-1] / lam[0]) if lam[0] > 0 else float("inf")
 
-    kappa_est = estimate_cond_mhat(A_dense, x, s)
+    kappa_est = estimate_mnes_cond(A_dense, x, s)
     rel_err = abs(kappa_est - kappa_exact) / max(kappa_exact, 1.0)
     assert rel_err < COND_MHAT_TOL, (
         f"{stem}: kappa_est={kappa_est:.4g}, kappa_exact={kappa_exact:.4g}, "
@@ -324,8 +463,8 @@ def test_estimate_cond_mhat_fixtures(stem: str) -> None:
     sorted(TEST_DATA.glob("A_*.npz")),
     ids=lambda p: p.stem,
 )
-def test_estimate_cond_mhat_test_data(npz_path: Path) -> None:
-    """estimate_cond_mhat agrees with eigvalsh(M̂) on the reduce_with_basis matrices."""
+def test_estimate_mnes_cond_test_data(npz_path: Path) -> None:
+    """estimate_mnes_cond agrees with eigvalsh(M̂) on the reduce_with_basis matrices."""
     if not npz_path.is_file():
         pytest.skip(f"Test data file not found: {npz_path}")
 
@@ -344,7 +483,7 @@ def test_estimate_cond_mhat_test_data(npz_path: Path) -> None:
     lam = np.linalg.eigvalsh(M_hat)
     kappa_exact = float(lam[-1] / lam[0]) if lam[0] > 0 else float("inf")
 
-    kappa_est = estimate_cond_mhat(A, x, s)
+    kappa_est = estimate_mnes_cond(A, x, s)
     rel_err = abs(kappa_est - kappa_exact) / max(kappa_exact, 1.0)
     assert rel_err < COND_MHAT_TOL, (
         f"{npz_path.stem}: kappa_est={kappa_est:.4g}, kappa_exact={kappa_exact:.4g}, "
@@ -359,7 +498,7 @@ def _build_mhat_for_spqr_basis(
 ) -> np.ndarray:
     """Build M̂ explicitly using the SPQR (sparseqr) basis for testing purposes.
 
-    Mirrors the basis selection in estimate_cond_mhat's sparse path so the test
+    Mirrors the basis selection in estimate_mnes_cond's sparse path so the test
     reference and the estimator use the same basis.
     """
     import sparseqr
@@ -385,14 +524,14 @@ def _build_mhat_for_spqr_basis(
 
 
 @pytest.mark.parametrize("stem", FIXTURE_STEMS)
-def test_estimate_cond_mhat_sparse_matches_dense(stem: str) -> None:
-    """estimate_cond_mhat with sparse CSR input is sound (κ ≥ 1).
+def test_estimate_mnes_cond_sparse_matches_dense(stem: str) -> None:
+    """estimate_mnes_cond with sparse CSR input is sound (κ ≥ 1).
 
     The sparse path uses SuiteSparse SPQR (COLAMD/AMD ordering) while the dense path
     uses LAPACK DGEQP3.  The two paths select different bases and can produce
     substantially different M̂ matrices, so only soundness is asserted here.
     Accuracy of the sparse eigsh estimate is verified in
-    test_estimate_cond_mhat_sparse_accuracy.
+    test_estimate_mnes_cond_sparse_accuracy.
     """
     sde_path = FIXTURES / f"{stem}.sde"
     init_path = FIXTURES / f"{stem}.init"
@@ -403,7 +542,7 @@ def test_estimate_cond_mhat_sparse_matches_dense(stem: str) -> None:
     A_sparse = csr_matrix(A_dense)
     x, y, s = _load_init(init_path)
 
-    kappa_sparse = estimate_cond_mhat(A_sparse, x, s)
+    kappa_sparse = estimate_mnes_cond(A_sparse, x, s)
 
     assert np.isfinite(kappa_sparse), f"{stem}: kappa_sparse={kappa_sparse} is not finite"
     assert kappa_sparse >= 1.0 - 1e-6, (
@@ -412,10 +551,10 @@ def test_estimate_cond_mhat_sparse_matches_dense(stem: str) -> None:
 
 
 @pytest.mark.parametrize("stem", FIXTURE_STEMS)
-def test_estimate_cond_mhat_sparse_accuracy(stem: str) -> None:
+def test_estimate_mnes_cond_sparse_accuracy(stem: str) -> None:
     """eigsh estimate for the SPQR-selected basis agrees with eigvalsh(M̂_SPQR) within 1%.
 
-    Builds M̂ explicitly for the same SPQR basis that estimate_cond_mhat uses,
+    Builds M̂ explicitly for the same SPQR basis that estimate_mnes_cond uses,
     computes the exact condition number via eigvalsh, and checks the eigsh-based
     estimator agrees to within COND_MHAT_TOL.
     """
@@ -432,7 +571,7 @@ def test_estimate_cond_mhat_sparse_accuracy(stem: str) -> None:
     lam = np.linalg.eigvalsh(M_hat_spqr)
     kappa_exact = float(lam[-1] / lam[0]) if lam[0] > 0 else float("inf")
 
-    kappa_est = estimate_cond_mhat(A_sparse, x, s)
+    kappa_est = estimate_mnes_cond(A_sparse, x, s)
     rel_err = abs(kappa_est - kappa_exact) / max(kappa_exact, 1.0)
     assert rel_err < COND_MHAT_TOL, (
         f"{stem}: kappa_est={kappa_est:.4g}, kappa_exact(SPQR basis)={kappa_exact:.4g}, "

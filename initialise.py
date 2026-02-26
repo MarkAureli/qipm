@@ -8,8 +8,9 @@ from pathlib import Path
 
 import highspy
 import numpy as np
-from scipy.linalg import lstsq, null_space
+from scipy.linalg import null_space
 from scipy.sparse import csr_matrix, eye, hstack, vstack
+from scipy.sparse.linalg import lsqr as sparse_lsqr
 from tqdm import tqdm
 
 try:
@@ -83,13 +84,12 @@ def _find_primal_feasible_strict(A: csr_matrix, b: np.ndarray) -> np.ndarray:
     """Find x > 0 with Ax = b. Raises if not found."""
     m, n = A.shape
     delta = _STRICT_DELTA
-    # Minimum-norm solution to Ax = b (dense for lstsq).
-    Ad = A.toarray()
-    x0, residues, rank, sing = lstsq(Ad, b)
-    x0 = np.asarray(x0, dtype=np.float64).ravel()
+    # Minimum-norm solution to Ax = b via sparse iterative solver.
+    x0 = np.asarray(sparse_lsqr(A, b)[0], dtype=np.float64).ravel()
     if np.all(x0 > delta):
         return x0
     # Try to shift by null space: x = x0 + N @ alpha, require x >= delta.
+    Ad = A.toarray()
     N = null_space(Ad)
     if N.size == 0:
         raise RuntimeError("No null space; unique solution not strictly positive")

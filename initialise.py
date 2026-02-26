@@ -38,37 +38,32 @@ def _load_standard_form(path: Path) -> tuple[csr_matrix, np.ndarray, np.ndarray]
 
 
 def _find_dual_feasible_strict(A: csr_matrix, c: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Find y and s = c - A'y with s > 0 (elementwise). Returns (y, s). Raises if not found."""
+    """Find y and s = c - A'y with s > 0, maximising min(s). Returns (y, s). Raises if not found."""
     m, n = A.shape
     delta = _STRICT_DELTA
-    if np.all(c > delta):
-        y = np.zeros(m, dtype=np.float64)
-        s = c.copy()
-        return y, s
-    # Solve LP: find y such that A'y <= c - delta (so s = c - A'y >= delta).
-    # HiGHS: min 0, s.t. (A') y <= c - delta. Vars: y (m), rows: n.
+    # Chebyshev-centre LP: max t  s.t.  A'y + t·e ≤ c,  t ≥ delta
+    # Variables: [y (m), t (1)]; objective: min -t
+    # Constraint matrix: [A' | e]  (n × m+1)
     A_t = A.T.tocsr()
-    row_upper = (c - delta).astype(np.float64)
+    ones_col = csr_matrix(np.ones((n, 1)))
+    C = hstack([A_t, ones_col], format="csr")
+    n_vars = m + 1
+    col_lower = np.full(n_vars, -_HIGHS_INF, dtype=np.float64)
+    col_lower[m] = delta  # t ≥ delta: LP infeasible iff no strictly feasible s exists
+    col_upper = np.full(n_vars, _HIGHS_INF, dtype=np.float64)
+    col_cost = np.zeros(n_vars, dtype=np.float64)
+    col_cost[m] = -1.0  # minimise -t
     row_lower = np.full(n, -_HIGHS_INF, dtype=np.float64)
-    col_cost = np.zeros(m, dtype=np.float64)
-    col_lower = np.full(m, -_HIGHS_INF, dtype=np.float64)
-    col_upper = np.full(m, _HIGHS_INF, dtype=np.float64)
+    row_upper = c.astype(np.float64)
+    num_nz = int(C.nnz)
+    starts = C.indptr[:-1].astype(np.int32) if n > 0 else np.array([], dtype=np.int32)
     h = highspy.Highs()
     h.setOptionValue("log_to_console", False)
     h.setOptionValue("time_limit", 60.0)
-    h.addVars(m, col_lower, col_upper)
-    h.changeColsCost(m, np.arange(m, dtype=np.int64), col_cost)
-    num_nz = int(A_t.nnz)
-    starts = np.asarray(A_t.indptr[:-1], dtype=np.int32) if n > 0 else np.array([], dtype=np.int32)
-    h.addRows(
-        n,
-        row_lower,
-        row_upper,
-        num_nz,
-        starts,
-        A_t.indices.astype(np.int32),
-        A_t.data.astype(np.float64),
-    )
+    h.addVars(n_vars, col_lower, col_upper)
+    h.changeColsCost(n_vars, np.arange(n_vars, dtype=np.int64), col_cost)
+    h.addRows(n, row_lower, row_upper, num_nz, starts,
+              C.indices.astype(np.int32), C.data.astype(np.float64))
     status = h.run()
     if status != highspy.HighsStatus.kOk and status != highspy.HighsStatus.kWarning:
         raise RuntimeError(f"LP for dual feasible (y, s) failed (status={status})")
@@ -78,16 +73,18 @@ def _find_dual_feasible_strict(A: csr_matrix, c: np.ndarray) -> tuple[np.ndarray
     if model_status == highspy.HighsModelStatus.kTimeLimit:
         raise RuntimeError("Dual feasibility LP hit time limit")
     sol = h.getSolution()
-    y = np.asarray(sol.col_value, dtype=np.float64).ravel()
+    vars_sol = np.asarray(sol.col_value, dtype=np.float64).ravel()
+    y = vars_sol[:m]
+    t_opt = max(float(vars_sol[m]), delta)  # guard against numerical t < delta
     s = c - A_t @ y
-    if not np.all(s >= delta - _SOLVER_TOL):
+    if not np.all(s >= t_opt - _SOLVER_TOL):
         raise RuntimeError("Dual slack s not strictly positive after LP")
-    s = np.maximum(s, delta)
+    s = np.maximum(s, t_opt)
     return y, s
 
 
 def _find_primal_feasible_strict(A: csr_matrix, b: np.ndarray) -> np.ndarray:
-    """Find x > 0 with Ax = b. Raises if not found."""
+    """Find x > 0 with Ax = b, maximising min(x). Raises if not found."""
     m, n = A.shape
     delta = _STRICT_DELTA
     # Fast path: if lsqr minimum-norm solution is already strictly positive, use it.
@@ -95,37 +92,45 @@ def _find_primal_feasible_strict(A: csr_matrix, b: np.ndarray) -> np.ndarray:
     x0 = np.asarray(sparse_lsqr(A, b)[0], dtype=np.float64).ravel()
     if np.all(x0 > delta) and np.linalg.norm(A @ x0 - b) <= 1e-6 * (1.0 + float(np.linalg.norm(b))):
         return x0
-    # Direct positivity LP: find x s.t. Ax = b, x >= delta (no null-space needed).
+    # Chebyshev-centre LP: max t  s.t.  Ax = b,  x ≥ t·e,  t ≥ delta
+    # Variables: [x (n), t (1)]; objective: min -t
+    # Constraint matrix: [A | 0] (equality, m rows) stacked with [I | -e] (lower bound, n rows)
     A_csr = A.tocsr()
-    col_cost = np.zeros(n, dtype=np.float64)
-    col_lower = np.full(n, delta, dtype=np.float64)
-    col_upper = np.full(n, _HIGHS_INF, dtype=np.float64)
-    num_nz = int(A_csr.nnz)
-    starts = A_csr.indptr[:-1].astype(np.int32) if m > 0 else np.array([], dtype=np.int32)
+    eq_block = hstack([A_csr, csr_matrix((m, 1))], format="csr")
+    ineq_block = hstack([eye(n, format="csr"), csr_matrix(-np.ones((n, 1)))], format="csr")
+    C = vstack([eq_block, ineq_block], format="csr")
+    n_vars = n + 1
+    col_lower = np.zeros(n_vars, dtype=np.float64)
+    col_lower[n] = delta  # t ≥ delta: LP infeasible iff no strictly feasible x exists
+    col_upper = np.full(n_vars, _HIGHS_INF, dtype=np.float64)
+    col_cost = np.zeros(n_vars, dtype=np.float64)
+    col_cost[n] = -1.0  # minimise -t
+    row_lower = np.concatenate([b.astype(np.float64), np.zeros(n)])
+    row_upper = np.concatenate([b.astype(np.float64), np.full(n, _HIGHS_INF)])
+    num_nz = int(C.nnz)
+    starts = C.indptr[:-1].astype(np.int32) if (m + n) > 0 else np.array([], dtype=np.int32)
     h = highspy.Highs()
     h.setOptionValue("log_to_console", False)
-    h.addVars(n, col_lower, col_upper)
-    h.changeColsCost(n, np.arange(n, dtype=np.int64), col_cost)
-    h.addRows(
-        m,
-        b.astype(np.float64),
-        b.astype(np.float64),
-        num_nz,
-        starts,
-        A_csr.indices.astype(np.int32),
-        A_csr.data.astype(np.float64),
-    )
+    h.setOptionValue("time_limit", 60.0)
+    h.addVars(n_vars, col_lower, col_upper)
+    h.changeColsCost(n_vars, np.arange(n_vars, dtype=np.int64), col_cost)
+    h.addRows(m + n, row_lower, row_upper, num_nz, starts,
+              C.indices.astype(np.int32), C.data.astype(np.float64))
     status = h.run()
     model_status = h.getModelStatus()
     if model_status == highspy.HighsModelStatus.kInfeasible:
         raise RuntimeError("No strictly feasible primal solution exists (LP infeasible)")
     if status not in (highspy.HighsStatus.kOk, highspy.HighsStatus.kWarning):
         raise RuntimeError(f"LP for primal strictly feasible x failed (status={status})")
+    if model_status == highspy.HighsModelStatus.kTimeLimit:
+        raise RuntimeError("Primal feasibility LP hit time limit")
     sol = h.getSolution()
-    x = np.asarray(sol.col_value, dtype=np.float64).ravel()
-    if not np.all(x >= delta - _SOLVER_TOL):
+    vars_sol = np.asarray(sol.col_value, dtype=np.float64).ravel()
+    x = vars_sol[:n]
+    t_opt = max(float(vars_sol[n]), delta)  # guard against numerical t < delta
+    if not np.all(x >= t_opt - _SOLVER_TOL):
         raise RuntimeError("Primal x not strictly positive after LP")
-    x = np.maximum(x, delta)
+    x = np.maximum(x, t_opt)
     return x
 
 

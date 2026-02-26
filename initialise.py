@@ -90,15 +90,10 @@ def _find_primal_feasible_strict(A: csr_matrix, b: np.ndarray) -> np.ndarray:
     """Find x > 0 with Ax = b. Raises if not found."""
     m, n = A.shape
     delta = _STRICT_DELTA
-    # Minimum-norm solution to Ax = b via sparse iterative solver.
+    # Fast path: if lsqr minimum-norm solution is already strictly positive, use it.
+    # Infeasibility of Ax=b is determined authoritatively by the LP below.
     x0 = np.asarray(sparse_lsqr(A, b)[0], dtype=np.float64).ravel()
-    residual = float(np.linalg.norm(A @ x0 - b))
-    b_norm = float(np.linalg.norm(b))
-    if residual > 1e-6 * (1.0 + b_norm):
-        raise RuntimeError(
-            f"System Ax=b appears infeasible (residual={residual:.2e}, ||b||={b_norm:.2e})"
-        )
-    if np.all(x0 > delta):
+    if np.all(x0 > delta) and np.linalg.norm(A @ x0 - b) <= 1e-6 * (1.0 + float(np.linalg.norm(b))):
         return x0
     # Direct positivity LP: find x s.t. Ax = b, x >= delta (no null-space needed).
     A_csr = A.tocsr()
@@ -128,8 +123,9 @@ def _find_primal_feasible_strict(A: csr_matrix, b: np.ndarray) -> np.ndarray:
         raise RuntimeError(f"LP for primal strictly feasible x failed (status={status})")
     sol = h.getSolution()
     x = np.asarray(sol.col_value, dtype=np.float64).ravel()
-    if not np.all(x >= delta):
+    if not np.all(x >= delta - _SOLVER_TOL):
         raise RuntimeError("Primal x not strictly positive after LP")
+    x = np.maximum(x, delta)
     return x
 
 

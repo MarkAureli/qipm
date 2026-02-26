@@ -19,6 +19,8 @@ except AttributeError:
 
 # Minimum strict positivity for x and s
 _STRICT_DELTA = 1e-8
+# Tolerance for post-solve slack validation (LP solver floating-point noise)
+_SOLVER_TOL = 1e-7
 
 
 def _load_standard_form(path: Path) -> tuple[csr_matrix, np.ndarray, np.ndarray]:
@@ -53,6 +55,7 @@ def _find_dual_feasible_strict(A: csr_matrix, c: np.ndarray) -> tuple[np.ndarray
     col_upper = np.full(m, _HIGHS_INF, dtype=np.float64)
     h = highspy.Highs()
     h.setOptionValue("log_to_console", False)
+    h.setOptionValue("time_limit", 60.0)
     h.addVars(m, col_lower, col_upper)
     h.changeColsCost(m, np.arange(m, dtype=np.int64), col_cost)
     num_nz = int(A_t.nnz)
@@ -68,14 +71,18 @@ def _find_dual_feasible_strict(A: csr_matrix, c: np.ndarray) -> tuple[np.ndarray
     )
     status = h.run()
     if status != highspy.HighsStatus.kOk and status != highspy.HighsStatus.kWarning:
-        raise RuntimeError("LP for dual feasible (y, s) failed")
+        raise RuntimeError(f"LP for dual feasible (y, s) failed (status={status})")
+    model_status = h.getModelStatus()
+    if model_status == highspy.HighsModelStatus.kInfeasible:
+        raise RuntimeError("No dual feasible (y, s) exists — LP is infeasible")
+    if model_status == highspy.HighsModelStatus.kTimeLimit:
+        raise RuntimeError("Dual feasibility LP hit time limit")
     sol = h.getSolution()
     y = np.asarray(sol.col_value, dtype=np.float64).ravel()
     s = c - A_t @ y
-    if not np.all(s >= delta):
+    if not np.all(s >= delta - _SOLVER_TOL):
         raise RuntimeError("Dual slack s not strictly positive after LP")
-    # Ensure stored s is strictly positive (LP may return s_i = delta)
-    s = np.maximum(s, 2 * delta)
+    s = np.maximum(s, delta)
     return y, s
 
 

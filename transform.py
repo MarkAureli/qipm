@@ -230,6 +230,19 @@ def _transform_instance_from_path(path: Path) -> None:
         a.start_, a.index_, a.value_,
     )
 
+    # Strip zero rows from the standard form.
+    # Real-world MPS files (netlib, stochlp, misc, miplib, max_flow) commonly
+    # contain ghost equality rows: declared in ROWS as "E" but never referenced
+    # in COLUMNS or RHS, producing "0 = 0" constraints that survive presolve
+    # unchanged.  After _lp_to_standard_form these become all-zero rows with
+    # b[i] = 0, making A rank-deficient by the ghost count.  Dropping them is
+    # safe: they impose no constraint and only harm the condition-number estimate.
+    row_nnz = np.diff(A.indptr)
+    keep = row_nnz > 0
+    if not keep.all():
+        A = A[keep]
+        b = b[keep]
+
     out_std = path.with_suffix(".std")
     # savez_compressed appends .npz if missing; write to .npz then rename to .std
     out_npz = path.with_suffix(".npz")

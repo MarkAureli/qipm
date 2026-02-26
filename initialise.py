@@ -79,9 +79,9 @@ def _find_dual_feasible_strict(A: csr_matrix, c: np.ndarray) -> tuple[np.ndarray
     return y, s
 
 
-def _find_primal_feasible_strict(A: csr_matrix, b: np.ndarray, n: int) -> np.ndarray:
+def _find_primal_feasible_strict(A: csr_matrix, b: np.ndarray) -> np.ndarray:
     """Find x > 0 with Ax = b. Raises if not found."""
-    m = A.shape[0]
+    m, n = A.shape
     delta = _STRICT_DELTA
     # Minimum-norm solution to Ax = b (dense for lstsq).
     Ad = A.toarray()
@@ -143,9 +143,8 @@ def find_initial_triple(
     Raises if such a triple cannot be found.
     """
     m, n = A.shape
-    raise RuntimeError("Skip for testing purposes")
     y, s = _find_dual_feasible_strict(A, c)
-    x = _find_primal_feasible_strict(A, b, n)
+    x = _find_primal_feasible_strict(A, b)
     return x, y, s
 
 
@@ -268,7 +267,7 @@ def _initialise_instance_from_path(
     else:
         try:
             x, y, s = find_initial_triple(A, b, c)
-        except Exception:
+        except RuntimeError:
             result = selfdual_embedding(A, b, c)
             embedding_used = True
             if len(result) == 4:

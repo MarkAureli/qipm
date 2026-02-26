@@ -85,6 +85,12 @@ def _find_primal_feasible_strict(A: csr_matrix, b: np.ndarray) -> np.ndarray:
     delta = _STRICT_DELTA
     # Minimum-norm solution to Ax = b via sparse iterative solver.
     x0 = np.asarray(sparse_lsqr(A, b)[0], dtype=np.float64).ravel()
+    residual = float(np.linalg.norm(A @ x0 - b))
+    b_norm = float(np.linalg.norm(b))
+    if residual > 1e-6 * (1.0 + b_norm):
+        raise RuntimeError(
+            f"System Ax=b appears infeasible (residual={residual:.2e}, ||b||={b_norm:.2e})"
+        )
     if np.all(x0 > delta):
         return x0
     # Direct positivity LP: find x s.t. Ax = b, x >= delta (no null-space needed).

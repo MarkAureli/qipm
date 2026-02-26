@@ -123,7 +123,6 @@ def _find_primal_feasible_strict(A: csr_matrix, b: np.ndarray) -> np.ndarray:
     x = np.asarray(sol.col_value, dtype=np.float64).ravel()
     if not np.all(x >= delta):
         raise RuntimeError("Primal x not strictly positive after LP")
-    x = np.maximum(x, 2 * delta)
     return x
 
 

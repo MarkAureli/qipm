@@ -8,7 +8,6 @@ from pathlib import Path
 
 import highspy
 import numpy as np
-from scipy.linalg import null_space
 from scipy.sparse import csr_matrix, eye, hstack, vstack
 from scipy.sparse.linalg import lsqr as sparse_lsqr
 from tqdm import tqdm
@@ -88,47 +87,33 @@ def _find_primal_feasible_strict(A: csr_matrix, b: np.ndarray) -> np.ndarray:
     x0 = np.asarray(sparse_lsqr(A, b)[0], dtype=np.float64).ravel()
     if np.all(x0 > delta):
         return x0
-    # Try to shift by null space: x = x0 + N @ alpha, require x >= delta.
-    Ad = A.toarray()
-    N = null_space(Ad)
-    if N.size == 0:
-        raise RuntimeError("No null space; unique solution not strictly positive")
-    N = np.asarray(N, dtype=np.float64)
-    # N is (n, k). We need alpha (k,) such that x0 + N @ alpha >= delta.
-    k = N.shape[1]
-    # LP: min 0 s.t. x0 + N @ alpha >= delta. So N @ alpha >= delta - x0.
-    # Variables: alpha (k). Constraints: N.T is (k, n), we need (N.T).T @ alpha = N @ alpha >= delta - x0.
-    # So constraint matrix in HiGHS: one row per component: row_j = N[j, :], lower = (delta - x0)_j, upper = inf.
-    # So we have n constraints, k variables. Matrix: (n, k) = N.T (rows are constraints). So matrix is N (as n x k).
-    row_lower = (delta - x0).astype(np.float64)
-    row_upper = np.full(n, _HIGHS_INF, dtype=np.float64)
-    col_cost = np.zeros(k, dtype=np.float64)
-    col_lower = np.full(k, -_HIGHS_INF, dtype=np.float64)
-    col_upper = np.full(k, _HIGHS_INF, dtype=np.float64)
-    N_csr = csr_matrix(N)
+    # Direct positivity LP: find x s.t. Ax = b, x >= delta (no null-space needed).
+    A_csr = A.tocsr()
+    col_cost = np.zeros(n, dtype=np.float64)
+    col_lower = np.full(n, delta, dtype=np.float64)
+    col_upper = np.full(n, _HIGHS_INF, dtype=np.float64)
+    num_nz = int(A_csr.nnz)
+    starts = A_csr.indptr[:-1].astype(np.int32) if m > 0 else np.array([], dtype=np.int32)
     h = highspy.Highs()
     h.setOptionValue("log_to_console", False)
-    h.addVars(k, col_lower, col_upper)
-    h.changeColsCost(k, np.arange(k, dtype=np.int64), col_cost)
-    num_nz = int(N_csr.nnz)
-    starts = np.asarray(N_csr.indptr[:-1], dtype=np.int32) if n > 0 else np.array([], dtype=np.int32)
+    h.addVars(n, col_lower, col_upper)
+    h.changeColsCost(n, np.arange(n, dtype=np.int64), col_cost)
     h.addRows(
-        n,
-        row_lower,
-        row_upper,
+        m,
+        b.astype(np.float64),
+        b.astype(np.float64),
         num_nz,
         starts,
-        N_csr.indices.astype(np.int32),
-        N_csr.data.astype(np.float64),
+        A_csr.indices.astype(np.int32),
+        A_csr.data.astype(np.float64),
     )
     status = h.run()
     if status != highspy.HighsStatus.kOk and status != highspy.HighsStatus.kWarning:
         raise RuntimeError("LP for primal strictly feasible x failed")
     sol = h.getSolution()
-    alpha = np.asarray(sol.col_value, dtype=np.float64).ravel()
-    x = x0 + N @ alpha
+    x = np.asarray(sol.col_value, dtype=np.float64).ravel()
     if not np.all(x >= delta):
-        raise RuntimeError("Primal x not strictly positive after null-space shift")
+        raise RuntimeError("Primal x not strictly positive after LP")
     x = np.maximum(x, 2 * delta)
     return x
 

@@ -114,8 +114,11 @@ def _find_primal_feasible_strict(A: csr_matrix, b: np.ndarray) -> np.ndarray:
         A_csr.data.astype(np.float64),
     )
     status = h.run()
-    if status != highspy.HighsStatus.kOk and status != highspy.HighsStatus.kWarning:
-        raise RuntimeError("LP for primal strictly feasible x failed")
+    model_status = h.getModelStatus()
+    if model_status == highspy.HighsModelStatus.kInfeasible:
+        raise RuntimeError("No strictly feasible primal solution exists (LP infeasible)")
+    if status not in (highspy.HighsStatus.kOk, highspy.HighsStatus.kWarning):
+        raise RuntimeError(f"LP for primal strictly feasible x failed (status={status})")
     sol = h.getSolution()
     x = np.asarray(sol.col_value, dtype=np.float64).ravel()
     if not np.all(x >= delta):

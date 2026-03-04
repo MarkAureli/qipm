@@ -200,15 +200,72 @@ def _find_initial_triple_max_flow(
     b: np.ndarray,
     c: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Max-flow specialisation: x = 0.5 for all primal variables; (y, s) satisfy dual constraint s = c - A'y with s > 0.
+    """Max-flow specialisation: find x > 0 satisfying Ax = b via a sparse feasibility LP.
 
-    The max-flow LP has arc flow variables in [0, capacity_e] with flow-conservation equalities.
-    Setting x = 0.5 places flows and capacity-slack variables at the midpoint of their bounds,
-    giving a well-centred interior starting point independent of individual arc capacities.
+    Avoids the Chebyshev-centre LP (which adds n dense inequality rows x_i >= t and destroys
+    network sparsity) in favour of a plain feasibility LP: Ax = b, x >= delta, with column
+    lower bounds only. This preserves the original constraint-matrix structure so HiGHS can
+    apply its sparse simplex/barrier efficiently on the large network LPs that arise here.
     """
-    _, n = A.shape
-    x = np.full(n, 0.5, dtype=np.float64)
-    y, s = _find_dual_feasible_strict(A, c)
+    m, n = A.shape
+    delta = _STRICT_DELTA
+    A_csr = A.tocsr()
+
+    # Fast path: LSQR minimum-norm solution (works when the graph is well-conditioned).
+    x0 = np.asarray(sparse_lsqr(A_csr, b)[0], dtype=np.float64).ravel()
+    if (np.all(x0 > delta)
+            and np.linalg.norm(A_csr @ x0 - b) <= 1e-6 * (1.0 + float(np.linalg.norm(b)))):
+        x = x0
+    else:
+        # Sparse feasibility LP: Ax = b, x >= delta.
+        # Column lower bounds (not n extra rows) preserve the original sparsity pattern.
+        h = highspy.Highs()
+        h.setOptionValue("log_to_console", False)
+        h.setOptionValue("time_limit", 600.0)
+        col_lower = np.full(n, delta, dtype=np.float64)
+        col_upper = np.full(n, _HIGHS_INF, dtype=np.float64)
+        col_cost = np.zeros(n, dtype=np.float64)
+        h.addVars(n, col_lower, col_upper)
+        h.changeColsCost(n, np.arange(n, dtype=np.int64), col_cost)
+        starts = A_csr.indptr[:-1].astype(np.int32) if m > 0 else np.array([], dtype=np.int32)
+        h.addRows(m, b.astype(np.float64), b.astype(np.float64), int(A_csr.nnz),
+                  starts, A_csr.indices.astype(np.int32), A_csr.data.astype(np.float64))
+        h.run()
+        model_status = h.getModelStatus()
+        if model_status == highspy.HighsModelStatus.kInfeasible:
+            raise RuntimeError("No strictly feasible primal solution exists for max-flow LP")
+        if model_status == highspy.HighsModelStatus.kTimeLimit:
+            raise RuntimeError("Max-flow primal feasibility LP hit time limit")
+        sol = h.getSolution()
+        x = np.asarray(sol.col_value, dtype=np.float64).ravel()[:n]
+        x = np.maximum(x, delta)
+
+    # Dual: find y (unconstrained) s.t. A'y <= c - delta.
+    # Avoids the Chebyshev formulation which adds a dense t-column of length n.
+    A_T = A_csr.T.tocsr()  # n × m
+    col_lower_d = np.full(m, -_HIGHS_INF, dtype=np.float64)
+    col_upper_d = np.full(m, _HIGHS_INF, dtype=np.float64)
+    col_cost_d = np.zeros(m, dtype=np.float64)
+    row_upper_d = (c - delta).astype(np.float64)
+    row_lower_d = np.full(n, -_HIGHS_INF, dtype=np.float64)
+    starts_d = A_T.indptr[:-1].astype(np.int32) if n > 0 else np.array([], dtype=np.int32)
+    hd = highspy.Highs()
+    hd.setOptionValue("log_to_console", False)
+    hd.setOptionValue("time_limit", 600.0)
+    hd.addVars(m, col_lower_d, col_upper_d)
+    hd.changeColsCost(m, np.arange(m, dtype=np.int64), col_cost_d)
+    hd.addRows(n, row_lower_d, row_upper_d, int(A_T.nnz),
+               starts_d, A_T.indices.astype(np.int32), A_T.data.astype(np.float64))
+    hd.run()
+    model_status_d = hd.getModelStatus()
+    if model_status_d == highspy.HighsModelStatus.kInfeasible:
+        raise RuntimeError("No dual feasible (y, s) exists for max-flow LP")
+    if model_status_d == highspy.HighsModelStatus.kTimeLimit:
+        raise RuntimeError("Max-flow dual feasibility LP hit time limit")
+    sol_d = hd.getSolution()
+    y = np.asarray(sol_d.col_value, dtype=np.float64).ravel()[:m]
+    s = c.astype(np.float64) - A_csr.T @ y
+    s = np.maximum(s, delta)
     return x, y, s
 
 

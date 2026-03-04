@@ -91,6 +91,10 @@ def _benchmark_instance_from_path(
 
     A, b, c = _load_standard_form(path)
 
+    m = A.shape[0]
+    if m > 100_000:
+        return
+
     data_path = path.parent / (base_name + ".data")
     if data_path.exists():
         data = json.loads(data_path.read_text())

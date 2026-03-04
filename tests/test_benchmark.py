@@ -1,8 +1,7 @@
-"""Tests for benchmark: gate counts for qipm1/2/3 on fixture instances (.sde + .init).
+"""Tests for benchmark: gate counts for qipm1/2/3 on fixture instances (.std).
 
-For each test instance (fixture stem with both .sde and .init) and each qipm method (1, 2, 3),
+For each test instance (fixture stem with .std) and each qipm method (1, 2, 3),
 runs the gate-count benchmark and asserts the resulting gate count is a positive integer.
-Skips stems that do not have .sde and .init.
 """
 
 import json
@@ -30,24 +29,19 @@ BENCHMARK_FIXTURE_STEMS = [
 QIPM_METHODS = [1, 2, 3]
 
 
-def _instance_has_required_files(stem: str) -> bool:
-    """True if fixture has .sde and .init (benchmark uses SDE + embedding triple)."""
-    return (FIXTURES / f"{stem}.sde").is_file() and (FIXTURES / f"{stem}.init").is_file()
-
-
 @pytest.mark.parametrize("stem", BENCHMARK_FIXTURE_STEMS)
 @pytest.mark.parametrize("method", QIPM_METHODS)
 def test_gate_count_positive(stem: str, method: int, tmp_path: Path) -> None:
     """For each instance and qipm method, gate count is a positive integer."""
-    if not _instance_has_required_files(stem):
-        pytest.skip(f"Fixture {stem} missing .sde/.std or .init in {FIXTURES}")
+    std_path = FIXTURES / f"{stem}.std"
+    if not std_path.is_file():
+        pytest.skip(f"Fixture {stem} missing .std in {FIXTURES}")
 
     instance_class = "fixtures"
     instance_dir = tmp_path / instance_class / stem
     instance_dir.mkdir(parents=True)
 
-    shutil.copy(FIXTURES / f"{stem}.sde", instance_dir / f"{stem}.sde")
-    shutil.copy(FIXTURES / f"{stem}.init", instance_dir / f"{stem}.init")
+    shutil.copy(std_path, instance_dir / f"{stem}.std")
 
     benchmark_instance(
         instance_class,

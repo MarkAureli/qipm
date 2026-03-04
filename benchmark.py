@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark LP instances: (A,b,c) from .sde if present else .std; initial triple from .init; compute gate counts for qipm1/2/3 and write to instance .data (JSON)."""
+"""Benchmark LP instances: (A,b,c) from .std; compute gate counts for qipm1/2/3 and write to instance .data (JSON)."""
 
 from __future__ import annotations
 
@@ -19,13 +19,8 @@ def _gate_count_qipm1(
     A: csr_matrix,
     b: np.ndarray,
     c: np.ndarray,
-    x_init: np.ndarray | None,
-    y_init: np.ndarray | None,
-    s_init: np.ndarray | None,
 ) -> tuple[int, int, float]:
-    """Return (gate_count, sparsity, cond) for qipm1. Requires initial triple (x_init, y_init, s_init) from .init."""
-    if x_init is None or y_init is None or s_init is None:
-        raise ValueError("qipm1 requires initial triple (x_init, y_init, s_init) from .init")
+    """Return (gate_count, sparsity, cond) for qipm1."""
     m = A.shape[0]
     d = m  # M̂ = I + F̄F̄ᵀ is generically dense: d = m for LP instances
     k = estimate_mnes_cond(A)
@@ -41,11 +36,8 @@ def _gate_count_qipm2(
     A: csr_matrix,
     b: np.ndarray,
     c: np.ndarray,
-    x_init: np.ndarray | None,
-    y_init: np.ndarray | None,
-    s_init: np.ndarray | None,
 ) -> tuple[int, int, float]:
-    """Return (gate_count, sparsity, cond) for qipm2. Requires initial triple (x_init, y_init, s_init) from .init."""
+    """Return (gate_count, sparsity, cond) for qipm2."""
     raise NotImplementedError
 
 
@@ -53,11 +45,8 @@ def _gate_count_qipm3(
     A: csr_matrix,
     b: np.ndarray,
     c: np.ndarray,
-    x_init: np.ndarray | None,
-    y_init: np.ndarray | None,
-    s_init: np.ndarray | None,
 ) -> tuple[int, int, float]:
-    """Return (gate_count, sparsity, cond) for qipm3. Requires initial triple (x_init, y_init, s_init) from .init."""
+    """Return (gate_count, sparsity, cond) for qipm3."""
     raise NotImplementedError
 
 
@@ -65,7 +54,7 @@ _GATE_COUNT_FUNCS = {1: _gate_count_qipm1, 2: _gate_count_qipm2, 3: _gate_count_
 
 
 def _load_standard_form(path: Path) -> tuple[csr_matrix, np.ndarray, np.ndarray]:
-    """Load (A, b, c) from .std or .sde standard-form LP (same npz format). A returned as CSR."""
+    """Load (A, b, c) from .std standard-form LP (npz format). A returned as CSR."""
     data = np.load(path)
     c = np.asarray(data["c"], dtype=np.float64).ravel()
     b = np.asarray(data["b"], dtype=np.float64).ravel()
@@ -78,35 +67,20 @@ def _load_standard_form(path: Path) -> tuple[csr_matrix, np.ndarray, np.ndarray]
     return A, b, c
 
 
-def _load_init(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Load initial triple (x, y, s) from .init npz."""
-    data = np.load(path)
-    x = np.asarray(data["x"], dtype=np.float64).ravel()
-    y = np.asarray(data["y"], dtype=np.float64).ravel()
-    s = np.asarray(data["s"], dtype=np.float64).ravel()
-    return x, y, s
-
 
 def _benchmark_instance_from_path(
     path: Path,
     qipm_numbers: list[int] | None = None,
 ) -> None:
-    """Load (A, b, c) from .sde if present else .std; load initial triple from .init; compute gate counts, write to instance .data (JSON). path must be .std or .sde."""
+    """Load (A, b, c) from .std; compute gate counts, write to instance .data (JSON). path must be .std."""
     path = path.resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Instance file not found: {path}")
-    suf = path.suffix.lower()
-    if suf not in (".std", ".sde"):
-        raise ValueError(f"Path must be .std or .sde; got {path.suffix!r}")
+    if path.suffix.lower() != ".std":
+        raise ValueError(f"Path must be .std; got {path.suffix!r}")
 
     # Strip only the known extension so names with dots (e.g. clique "name.dimac_clq.std") stay correct
-    base_name = path.name[: -len(suf)]
-    base = path.parent / base_name
-    sde_path = path.parent / (base_name + ".sde")
-    std_path = path.parent / (base_name + ".std")
-    lp_path = sde_path if sde_path.is_file() else std_path
-    if not lp_path.is_file():
-        raise FileNotFoundError(f"Neither {sde_path} nor {std_path} found")
+    base_name = path.name[: -len(".std")]
 
     numbers = qipm_numbers if qipm_numbers else [1, 2, 3]
     if not numbers:
@@ -115,13 +89,7 @@ def _benchmark_instance_from_path(
         if n not in (1, 2, 3):
             raise ValueError(f"qipm_numbers must contain only 1, 2, or 3; got {n}")
 
-    A, b, c = _load_standard_form(lp_path)
-
-    init_path = path.parent / (base_name + ".init")
-    if init_path.is_file():
-        x_init, y_init, s_init = _load_init(init_path)
-    else:
-        x_init, y_init, s_init = None, None, None
+    A, b, c = _load_standard_form(path)
 
     data_path = path.parent / (base_name + ".data")
     if data_path.exists():
@@ -130,7 +98,7 @@ def _benchmark_instance_from_path(
         data = {}
 
     for n in numbers:
-        count, sparsity, cond = _GATE_COUNT_FUNCS[n](A, b, c, x_init, y_init, s_init)
+        count, sparsity, cond = _GATE_COUNT_FUNCS[n](A, b, c)
         data[f"gate_count_qipm{n}"] = count
         data[f"sparsity_qipm{n}"] = sparsity
         data[f"cond_qipm{n}"] = cond
@@ -146,7 +114,7 @@ def benchmark_instance(
 ) -> None:
     """Run gate-count benchmark for the instance in cache_dir/instance_class/instance_name/.
 
-    Discovers the instance by .sde if present (exactly one), else by .std (exactly one). Loads (A,b,c) from that file and initial triple from .init; writes gate counts to instance .data (JSON).
+    Discovers the instance by .std (exactly one). Loads (A,b,c) from that file; writes gate counts to instance .data (JSON).
     instance_class: e.g. "netlib", "miplib".
     instance_name: subfolder name (instance stem).
     cache_dir: root containing instance-class subfolders; defaults to "cache_dir".
@@ -156,21 +124,12 @@ def benchmark_instance(
     instance_dir = root / instance_class / instance_name
     if not instance_dir.is_dir():
         raise FileNotFoundError(f"Instance directory not found: {instance_dir}")
-    sde_files = sorted(instance_dir.glob("*.sde"))
     std_files = sorted(instance_dir.glob("*.std"))
-    if sde_files:
-        if len(sde_files) != 1:
-            raise FileNotFoundError(
-                f"Expected exactly one .sde in {instance_dir}; found {len(sde_files)}"
-            )
-        instance_path = sde_files[0]
-    else:
-        if len(std_files) != 1:
-            raise FileNotFoundError(
-                f"Expected exactly one .std in {instance_dir}; found {len(std_files)}"
-            )
-        instance_path = std_files[0]
-    _benchmark_instance_from_path(instance_path, qipm_numbers=qipm_numbers)
+    if len(std_files) != 1:
+        raise FileNotFoundError(
+            f"Expected exactly one .std in {instance_dir}; found {len(std_files)}"
+        )
+    _benchmark_instance_from_path(std_files[0], qipm_numbers=qipm_numbers)
 
 
 def benchmark_instance_class(

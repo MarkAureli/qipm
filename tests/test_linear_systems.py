@@ -5,9 +5,8 @@ Three test suites:
    and recovering Δy = T^T Δŷ satisfies M Δy = ω (the two systems are equivalent).
 2. Sparse vs dense: for each fixture, verify that passing a CSR sparse matrix
    produces identical M̂/ω̂ to passing a dense ndarray, and report wall-time for both.
-3. estimate_mnes_cond: verify that the LinearOperator/eigsh-based estimator agrees
-   with the exact eigvalsh condition number of M̂ on fixtures, and that sparse/dense
-   inputs give identical results.
+3. estimate_mnes_cond: verify that the SPQR/eigsh-based estimator agrees with the
+   exact eigvalsh condition number of M̂ on fixtures.
 """
 
 import time
@@ -360,32 +359,6 @@ def test_sparse_timing(stem: str) -> None:
 COND_MHAT_TOL = 0.01   # 1 % relative tolerance between estimate and eigvalsh
 
 
-@pytest.mark.parametrize("stem", FIXTURE_STEMS)
-def test_estimate_mnes_cond_fixtures(stem: str) -> None:
-    """estimate_mnes_cond agrees with eigvalsh(M̂) to within 1 % on all fixtures."""
-    sde_path = FIXTURES / f"{stem}.sde"
-    if not sde_path.is_file():
-        pytest.skip(f"Fixture not found: {stem}")
-
-    A_dense, b, c = _load_std(sde_path)
-    m, n = A_dense.shape
-    x_ones = np.ones(n)
-    y_zeros = np.zeros(m)
-    s_ones = np.ones(n)
-
-    M_hat, _ = build_modified_nes(A_dense, b, c, x_ones, y_zeros, s_ones)
-    lam = np.linalg.eigvalsh(M_hat)
-    kappa_exact = float(lam[-1] / lam[0]) if lam[0] > 0 else float("inf")
-
-    kappa_est = estimate_mnes_cond(A_dense)
-    rel_err = abs(kappa_est - kappa_exact) / max(kappa_exact, 1.0)
-    assert rel_err < COND_MHAT_TOL, (
-        f"{stem}: kappa_est={kappa_est:.4g}, kappa_exact={kappa_exact:.4g}, "
-        f"rel_err={rel_err:.2%}"
-    )
-
-
-
 def _build_mhat_for_spqr_basis(A_dense: np.ndarray) -> np.ndarray:
     """Build M̂ explicitly using the SPQR (sparseqr) basis for testing purposes.
 
@@ -407,31 +380,6 @@ def _build_mhat_for_spqr_basis(A_dense: np.ndarray) -> np.ndarray:
     A_B_inv = np.linalg.solve(A_B, np.eye(m))
     M = A_arr @ A_arr.T
     return A_B_inv @ M @ A_B_inv.T
-
-
-@pytest.mark.parametrize("stem", FIXTURE_STEMS)
-def test_estimate_mnes_cond_sparse_matches_dense(stem: str) -> None:
-    """estimate_mnes_cond with sparse CSR input is sound (κ ≥ 1).
-
-    The sparse path uses SuiteSparse SPQR (COLAMD/AMD ordering) while the dense path
-    uses LAPACK DGEQP3.  The two paths select different bases and can produce
-    substantially different M̂ matrices, so only soundness is asserted here.
-    Accuracy of the sparse eigsh estimate is verified in
-    test_estimate_mnes_cond_sparse_accuracy.
-    """
-    sde_path = FIXTURES / f"{stem}.sde"
-    if not sde_path.is_file():
-        pytest.skip(f"Fixture not found: {stem}")
-
-    A_dense, _, _ = _load_std(sde_path)
-    A_sparse = csr_matrix(A_dense)
-
-    kappa_sparse = estimate_mnes_cond(A_sparse)
-
-    assert np.isfinite(kappa_sparse), f"{stem}: kappa_sparse={kappa_sparse} is not finite"
-    assert kappa_sparse >= 1.0 - 1e-6, (
-        f"{stem}: kappa_sparse={kappa_sparse:.4g} < 1 (λ_min(M̂) ≥ 1 violated)"
-    )
 
 
 @pytest.mark.parametrize("stem", FIXTURE_STEMS)

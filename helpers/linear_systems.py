@@ -4,8 +4,7 @@
 from __future__ import annotations
 
 import numpy as np
-from scipy.linalg import lu_factor, lu_solve, qr
-from scipy.sparse import spmatrix, issparse
+from scipy.sparse import spmatrix, csr_matrix, issparse
 
 
 def estimate_mnes_cond(
@@ -26,13 +25,14 @@ def estimate_mnes_cond(
     rank(F̄) < m, i.e. when n − m < m).  eigsh converges reliably for both
     extremes because all eigenvalues are ≥ 1 and bounded away from zero.
 
-    The basis B is selected by QR with column pivoting on A.  Row reduction
-    (if A is rank-deficient) is handled identically to build_modified_nes.
+    The basis B is selected by SuiteSparse SPQR (via sparseqr) with column
+    pivoting on A.  Row reduction (if A is rank-deficient) is handled via a
+    second SPQR call on Aᵀ.
 
     Parameters
     ----------
     A : (m, n) dense ndarray or scipy sparse matrix
-        Constraint matrix.
+        Constraint matrix.  Dense arrays are converted to CSR internally.
     tol : float
         ARPACK tolerance for eigsh (0 = machine precision).
     maxiter : int or None
@@ -43,41 +43,26 @@ def estimate_mnes_cond(
     kappa : float
         2-norm condition number of M̂.
     """
-    from scipy.sparse.linalg import LinearOperator, eigsh
+    import sparseqr
+    from scipy.sparse.linalg import LinearOperator, eigsh, splu
 
-    if issparse(A):
-        from scipy.sparse import csr_matrix
-        A = csr_matrix(A, dtype=np.float64)
-    else:
-        A = np.asarray(A, dtype=np.float64)
+    A = csr_matrix(A, dtype=np.float64) if not issparse(A) else csr_matrix(A, dtype=np.float64)
 
     m, n = A.shape
 
-    # --- Basis selection: QR with column pivoting on A (D = I, so no scaling) ---
-    # For sparse A, use SuiteSparse SPQR (via sparseqr).
-    if issparse(A):
-        import sparseqr
-        _, _, basis_P, effective_rank = sparseqr.qr(A)
-        basis_P = np.asarray(basis_P, dtype=np.intp)
-    else:
-        _, R, basis_P = qr(A, pivoting=True)
-        r_diag = np.abs(np.diag(R))
-        tol_rank = max(A.shape) * np.finfo(float).eps * (r_diag[0] if r_diag.size else 1.0)
-        effective_rank = int(np.sum(r_diag > tol_rank))
+    # --- Basis selection: SPQR with column pivoting on A ---
+    _, _, basis_P, effective_rank = sparseqr.qr(A)
+    basis_P = np.asarray(basis_P, dtype=np.intp)
 
-    # --- Row reduction (consistent with build_modified_nes) ---
+    # --- Row reduction (if A is rank-deficient) ---
     if effective_rank < m:
-        if issparse(A):
-            _, _, P_row, _ = sparseqr.qr(A.T)
-            P_row = np.asarray(P_row, dtype=np.intp)
-        else:
-            _, _, P_row = qr(A.T, pivoting=True)
-        row_subset = P_row[:effective_rank]
-        A = A[row_subset, :]
+        _, _, P_row, _ = sparseqr.qr(A.T)
+        P_row = np.asarray(P_row, dtype=np.intp)
+        A = A[P_row[:effective_rank], :]
         m = effective_rank
 
     # --- Basis and non-basis column indices ---
-    B = np.asarray(basis_P[:m], dtype=np.intp)
+    B = basis_P[:m]
     N_mask = np.ones(n, dtype=bool)
     N_mask[B] = False
     N = np.where(N_mask)[0]
@@ -87,37 +72,17 @@ def estimate_mnes_cond(
     if n_N == 0 or m <= 1:
         return 1.0
 
-    # --- F̄ components (D_B = D_N = I) ---
-    if issparse(A):
-        from scipy.sparse.linalg import splu
-        A_B_sparse = A[:, B]    # sparse m × m — keep sparse to avoid O(m²) densification
-        A_N = A[:, N]           # sparse m × n_N
-        A_B_lu = splu(A_B_sparse.tocsc())
+    # --- F̄ components: A_B_lu for triangular solves, A_N for matvecs ---
+    A_B_lu = splu(A[:, B].tocsc())
+    A_N = A[:, N]
 
-        def _fbar_mv(v: np.ndarray) -> np.ndarray:
-            """F̄ v = A_B⁻¹ @ (A_N @ v)"""
-            v = np.asarray(v, dtype=np.float64).ravel()
-            return A_B_lu.solve(np.asarray(A_N @ v).ravel())
+    def _fbar_mv(v: np.ndarray) -> np.ndarray:
+        """F̄ v = A_B⁻¹ @ (A_N @ v)"""
+        return A_B_lu.solve(np.asarray(A_N @ v, dtype=np.float64).ravel())
 
-        def _fbar_rmv(u: np.ndarray) -> np.ndarray:
-            """F̄ᵀ u = A_N.T @ (A_B⁻ᵀ @ u)"""
-            u = np.asarray(u, dtype=np.float64).ravel()
-            return np.asarray(A_N.T @ A_B_lu.solve(u, trans="T")).ravel()
-
-    else:
-        A_B = A[:, B]
-        A_N = A[:, N]
-        lu_fac = lu_factor(A_B)
-
-        def _fbar_mv(v: np.ndarray) -> np.ndarray:
-            """F̄ v = A_B⁻¹ @ (A_N @ v)"""
-            v = np.asarray(v, dtype=np.float64).ravel()
-            return lu_solve(lu_fac, np.asarray(A_N @ v).ravel())
-
-        def _fbar_rmv(u: np.ndarray) -> np.ndarray:
-            """F̄ᵀ u = A_N.T @ (A_B⁻ᵀ @ u)"""
-            u = np.asarray(u, dtype=np.float64).ravel()
-            return np.asarray(A_N.T @ lu_solve(lu_fac, u, trans=1)).ravel()
+    def _fbar_rmv(u: np.ndarray) -> np.ndarray:
+        """F̄ᵀ u = A_N.T @ (A_B⁻ᵀ @ u)"""
+        return np.asarray(A_N.T @ A_B_lu.solve(u, trans="T"), dtype=np.float64).ravel()
 
     def _mhat_mv(v: np.ndarray) -> np.ndarray:
         """M̂ v = v + F̄(F̄ᵀ v)"""

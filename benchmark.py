@@ -28,7 +28,7 @@ def _gate_count_qipm1(
         raise ValueError("qipm1 requires initial triple (x_init, y_init, s_init) from .init")
     m = A.shape[0]
     d = m  # M̂ = I + F̄F̄ᵀ is generically dense: d = m for LP instances
-    k = estimate_mnes_cond(A, x_init, s_init)
+    k = estimate_mnes_cond(A)
     count = (
         gate_count_qlsa(d=d, k=k)
         + gate_count_state_preparation(np.arange(1.0, m + 1))

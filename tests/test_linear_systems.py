@@ -364,18 +364,20 @@ COND_MHAT_TOL = 0.01   # 1 % relative tolerance between estimate and eigvalsh
 def test_estimate_mnes_cond_fixtures(stem: str) -> None:
     """estimate_mnes_cond agrees with eigvalsh(M̂) to within 1 % on all fixtures."""
     sde_path = FIXTURES / f"{stem}.sde"
-    init_path = FIXTURES / f"{stem}.init"
-    if not sde_path.is_file() or not init_path.is_file():
+    if not sde_path.is_file():
         pytest.skip(f"Fixture not found: {stem}")
 
     A_dense, b, c = _load_std(sde_path)
-    x, y, s = _load_init(init_path)
+    m, n = A_dense.shape
+    x_ones = np.ones(n)
+    y_zeros = np.zeros(m)
+    s_ones = np.ones(n)
 
-    M_hat, _ = build_modified_nes(A_dense, b, c, x, y, s)
+    M_hat, _ = build_modified_nes(A_dense, b, c, x_ones, y_zeros, s_ones)
     lam = np.linalg.eigvalsh(M_hat)
     kappa_exact = float(lam[-1] / lam[0]) if lam[0] > 0 else float("inf")
 
-    kappa_est = estimate_mnes_cond(A_dense, x, s)
+    kappa_est = estimate_mnes_cond(A_dense)
     rel_err = abs(kappa_est - kappa_exact) / max(kappa_exact, 1.0)
     assert rel_err < COND_MHAT_TOL, (
         f"{stem}: kappa_est={kappa_est:.4g}, kappa_exact={kappa_exact:.4g}, "
@@ -384,36 +386,27 @@ def test_estimate_mnes_cond_fixtures(stem: str) -> None:
 
 
 
-def _build_mhat_for_spqr_basis(
-    A_dense: np.ndarray,
-    x: np.ndarray,
-    s: np.ndarray,
-) -> np.ndarray:
+def _build_mhat_for_spqr_basis(A_dense: np.ndarray) -> np.ndarray:
     """Build M̂ explicitly using the SPQR (sparseqr) basis for testing purposes.
 
     Mirrors the basis selection in estimate_mnes_cond's sparse path so the test
-    reference and the estimator use the same basis.
+    reference and the estimator use the same basis.  D_B = D_N = I.
     """
     import sparseqr
-    from scipy.sparse import csr_matrix as csr, diags as sp_diags
+    from scipy.sparse import csr_matrix as csr
 
     A_sp = csr(A_dense)
     m, n = A_sp.shape
-    d_sqrt = np.sqrt(x / s)
-    d2 = x / s
-    A_scaled_sp = A_sp @ sp_diags(d_sqrt, 0, format="csr")
-    _, _, basis_P, effective_rank = sparseqr.qr(A_scaled_sp)
+    _, _, basis_P, effective_rank = sparseqr.qr(A_sp)
     basis_P = np.asarray(basis_P, dtype=np.intp)
     B = basis_P[:effective_rank]
     m = effective_rank
     A_arr = A_dense[:m, :]  # row reduction not exercised in fixtures
 
-    d_B_inv = np.sqrt(s[B] / x[B])
-    D_B_inv = np.diag(d_B_inv)
     A_B = A_arr[:, B]
     A_B_inv = np.linalg.solve(A_B, np.eye(m))
-    M = A_arr @ np.diag(d2) @ A_arr.T
-    return D_B_inv @ (A_B_inv @ M @ A_B_inv.T) @ D_B_inv
+    M = A_arr @ A_arr.T
+    return A_B_inv @ M @ A_B_inv.T
 
 
 @pytest.mark.parametrize("stem", FIXTURE_STEMS)
@@ -427,15 +420,13 @@ def test_estimate_mnes_cond_sparse_matches_dense(stem: str) -> None:
     test_estimate_mnes_cond_sparse_accuracy.
     """
     sde_path = FIXTURES / f"{stem}.sde"
-    init_path = FIXTURES / f"{stem}.init"
-    if not sde_path.is_file() or not init_path.is_file():
+    if not sde_path.is_file():
         pytest.skip(f"Fixture not found: {stem}")
 
     A_dense, _, _ = _load_std(sde_path)
     A_sparse = csr_matrix(A_dense)
-    x, y, s = _load_init(init_path)
 
-    kappa_sparse = estimate_mnes_cond(A_sparse, x, s)
+    kappa_sparse = estimate_mnes_cond(A_sparse)
 
     assert np.isfinite(kappa_sparse), f"{stem}: kappa_sparse={kappa_sparse} is not finite"
     assert kappa_sparse >= 1.0 - 1e-6, (
@@ -452,19 +443,17 @@ def test_estimate_mnes_cond_sparse_accuracy(stem: str) -> None:
     estimator agrees to within COND_MHAT_TOL.
     """
     sde_path = FIXTURES / f"{stem}.sde"
-    init_path = FIXTURES / f"{stem}.init"
-    if not sde_path.is_file() or not init_path.is_file():
+    if not sde_path.is_file():
         pytest.skip(f"Fixture not found: {stem}")
 
     A_dense, _, _ = _load_std(sde_path)
     A_sparse = csr_matrix(A_dense)
-    x, y, s = _load_init(init_path)
 
-    M_hat_spqr = _build_mhat_for_spqr_basis(A_dense, x, s)
+    M_hat_spqr = _build_mhat_for_spqr_basis(A_dense)
     lam = np.linalg.eigvalsh(M_hat_spqr)
     kappa_exact = float(lam[-1] / lam[0]) if lam[0] > 0 else float("inf")
 
-    kappa_est = estimate_mnes_cond(A_sparse, x, s)
+    kappa_est = estimate_mnes_cond(A_sparse)
     rel_err = abs(kappa_est - kappa_exact) / max(kappa_exact, 1.0)
     assert rel_err < COND_MHAT_TOL, (
         f"{stem}: kappa_est={kappa_est:.4g}, kappa_exact(SPQR basis)={kappa_exact:.4g}, "

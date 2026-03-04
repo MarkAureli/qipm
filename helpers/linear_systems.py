@@ -5,20 +5,19 @@ from __future__ import annotations
 
 import numpy as np
 from scipy.linalg import lu_factor, lu_solve, qr
-from scipy.sparse import spmatrix, diags as sp_diags, issparse
+from scipy.sparse import spmatrix, issparse
 
 
 def estimate_mnes_cond(
     A: np.ndarray | spmatrix,
-    x: np.ndarray,
-    s: np.ndarray,
     *,
     tol: float = 0.0,
     maxiter: int | None = None,
 ) -> float:
     """Estimate κ(M̂) without materialising the m×m matrix M̂.
 
-    Uses the identity M̂ = I + F̄F̄ᵀ where F̄ = D_B⁻¹ A_B⁻¹ A_N D_N (m × (n−m)).
+    Uses the identity M̂ = I + F̄F̄ᵀ where F̄ = A_B⁻¹ A_N (m × (n−m)),
+    i.e. x and s are replaced by identity (D_B = D_N = I).
     M̂ is represented as a ``scipy.sparse.linalg.LinearOperator``
     (matvec: v → v + F̄(F̄ᵀv)) and ``scipy.sparse.linalg.eigsh`` is used to
     obtain λ_max and λ_min without forming M̂ as a dense array.
@@ -27,16 +26,13 @@ def estimate_mnes_cond(
     rank(F̄) < m, i.e. when n − m < m).  eigsh converges reliably for both
     extremes because all eigenvalues are ≥ 1 and bounded away from zero.
 
-    The basis B is selected by QR with column pivoting on A·diag(√(x/s)),
-    matching the logic in build_modified_nes.  Row reduction (if A is rank-
-    deficient) is handled identically to build_modified_nes.
+    The basis B is selected by QR with column pivoting on A.  Row reduction
+    (if A is rank-deficient) is handled identically to build_modified_nes.
 
     Parameters
     ----------
     A : (m, n) dense ndarray or scipy sparse matrix
         Constraint matrix.
-    x, s : (n,) arrays
-        Strictly positive primal variables and dual slacks.
     tol : float
         ARPACK tolerance for eigsh (0 = machine precision).
     maxiter : int or None
@@ -49,9 +45,6 @@ def estimate_mnes_cond(
     """
     from scipy.sparse.linalg import LinearOperator, eigsh
 
-    x = np.asarray(x, dtype=np.float64).ravel()
-    s = np.asarray(s, dtype=np.float64).ravel()
-
     if issparse(A):
         from scipy.sparse import csr_matrix
         A = csr_matrix(A, dtype=np.float64)
@@ -60,20 +53,14 @@ def estimate_mnes_cond(
 
     m, n = A.shape
 
-    # --- Basis selection: QR with column pivoting on A·diag(√(x/s)) ---
-    # For sparse A, use SuiteSparse SPQR (via sparseqr) to avoid the O(m×n) dense
-    # allocation that (A @ sp_diags(d_sqrt)).toarray() would require.  SPQR uses
-    # COLAMD/AMD column ordering instead of LAPACK DGEQP3, so the selected basis
-    # will differ from the dense path but is equally valid.
-    d_sqrt = np.sqrt(x / s)
+    # --- Basis selection: QR with column pivoting on A (D = I, so no scaling) ---
+    # For sparse A, use SuiteSparse SPQR (via sparseqr).
     if issparse(A):
         import sparseqr
-        A_scaled_sp = A @ sp_diags(d_sqrt, 0, format="csr")
-        _, _, basis_P, effective_rank = sparseqr.qr(A_scaled_sp)
+        _, _, basis_P, effective_rank = sparseqr.qr(A)
         basis_P = np.asarray(basis_P, dtype=np.intp)
     else:
-        A_scaled = A * d_sqrt
-        _, R, basis_P = qr(A_scaled, pivoting=True)
+        _, R, basis_P = qr(A, pivoting=True)
         r_diag = np.abs(np.diag(R))
         tol_rank = max(A.shape) * np.finfo(float).eps * (r_diag[0] if r_diag.size else 1.0)
         effective_rank = int(np.sum(r_diag > tol_rank))
@@ -100,28 +87,22 @@ def estimate_mnes_cond(
     if n_N == 0 or m <= 1:
         return 1.0
 
-    # --- F̄ components ---
-    d_B_inv = np.sqrt(s[B] / x[B])
-    d_N = np.sqrt(x[N] / s[N])
-
+    # --- F̄ components (D_B = D_N = I) ---
     if issparse(A):
         from scipy.sparse.linalg import splu
         A_B_sparse = A[:, B]    # sparse m × m — keep sparse to avoid O(m²) densification
         A_N = A[:, N]           # sparse m × n_N
-        # splu uses SuperLU with fill-reducing ordering; memory ~ O(nnz(A_B) × fill-factor)
-        # rather than O(m²) for dense LU.  For netlib instances nnz(A_B)/m ≈ 2–15,
-        # giving 100×–10 000× less memory than the dense LU factor.
         A_B_lu = splu(A_B_sparse.tocsc())
 
         def _fbar_mv(v: np.ndarray) -> np.ndarray:
-            """F̄ v = D_B_inv * (A_B⁻¹ @ (A_N @ (D_N * v)))"""
+            """F̄ v = A_B⁻¹ @ (A_N @ v)"""
             v = np.asarray(v, dtype=np.float64).ravel()
-            return d_B_inv * A_B_lu.solve(np.asarray(A_N @ (d_N * v)).ravel())
+            return A_B_lu.solve(np.asarray(A_N @ v).ravel())
 
         def _fbar_rmv(u: np.ndarray) -> np.ndarray:
-            """F̄ᵀ u = D_N * (A_N.T @ (A_B⁻ᵀ @ (D_B_inv * u)))"""
+            """F̄ᵀ u = A_N.T @ (A_B⁻ᵀ @ u)"""
             u = np.asarray(u, dtype=np.float64).ravel()
-            return d_N * np.asarray(A_N.T @ A_B_lu.solve(d_B_inv * u, trans="T")).ravel()
+            return np.asarray(A_N.T @ A_B_lu.solve(u, trans="T")).ravel()
 
     else:
         A_B = A[:, B]
@@ -129,14 +110,14 @@ def estimate_mnes_cond(
         lu_fac = lu_factor(A_B)
 
         def _fbar_mv(v: np.ndarray) -> np.ndarray:
-            """F̄ v = D_B_inv * (A_B⁻¹ @ (A_N @ (D_N * v)))"""
+            """F̄ v = A_B⁻¹ @ (A_N @ v)"""
             v = np.asarray(v, dtype=np.float64).ravel()
-            return d_B_inv * lu_solve(lu_fac, np.asarray(A_N @ (d_N * v)).ravel())
+            return lu_solve(lu_fac, np.asarray(A_N @ v).ravel())
 
         def _fbar_rmv(u: np.ndarray) -> np.ndarray:
-            """F̄ᵀ u = D_N * (A_N.T @ (A_B⁻ᵀ @ (D_B_inv * u)))"""
+            """F̄ᵀ u = A_N.T @ (A_B⁻ᵀ @ u)"""
             u = np.asarray(u, dtype=np.float64).ravel()
-            return d_N * np.asarray(A_N.T @ lu_solve(lu_fac, d_B_inv * u, trans=1)).ravel()
+            return np.asarray(A_N.T @ lu_solve(lu_fac, u, trans=1)).ravel()
 
     def _mhat_mv(v: np.ndarray) -> np.ndarray:
         """M̂ v = v + F̄(F̄ᵀ v)"""

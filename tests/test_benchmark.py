@@ -2,7 +2,7 @@
 
 For each test instance (fixture stem with both .sde and .init) and each qipm method (1, 2, 3),
 runs the gate-count benchmark and asserts the resulting gate count is a positive integer.
-Uses the same fixture stems as test_initialise; skips stems that do not have .sde and .init.
+Skips stems that do not have .sde and .init.
 """
 
 import json
@@ -15,7 +15,7 @@ from benchmark import benchmark_instance
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
-# Same fixture stems as test_initialise; instances need .sde or .std and .init
+
 BENCHMARK_FIXTURE_STEMS = [
     "min_sum",
     "equality",

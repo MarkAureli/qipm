@@ -1,12 +1,12 @@
-"""Tests for helpers/linear_systems.py (estimate_mnes_cond) and test-local build_modified_nes.
+"""Tests for build_modified_nes (test-local) and _gate_count_qipm1 (benchmark.py).
 
 Three test suites:
 1. Soundness: for each fixture (.sde + .init), verify that solving M̂ Δŷ = ω̂
    and recovering Δy = T^T Δŷ satisfies M Δy = ω (the two systems are equivalent).
 2. Sparse vs dense: for each fixture, verify that passing a CSR sparse matrix
    produces identical M̂/ω̂ to passing a dense ndarray, and report wall-time for both.
-3. estimate_mnes_cond: verify that the SPQR/eigsh-based estimator agrees with the
-   exact eigvalsh condition number of M̂ on fixtures.
+3. MNES cond: verify that the SPQR/eigsh-based estimator in _gate_count_qipm1 agrees
+   with the exact eigvalsh condition number of M̂ on fixtures.
 """
 
 import time
@@ -17,7 +17,7 @@ import pytest
 from scipy.linalg import qr
 from scipy.sparse import csr_matrix, diags as sp_diags, spmatrix
 
-from helpers.linear_systems import estimate_mnes_cond
+from benchmark import _gate_count_qipm1
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -386,7 +386,7 @@ def _build_mhat_for_spqr_basis(A_dense: np.ndarray) -> np.ndarray:
 def test_estimate_mnes_cond_sparse_accuracy(stem: str) -> None:
     """eigsh estimate for the SPQR-selected basis agrees with eigvalsh(M̂_SPQR) within 1%.
 
-    Builds M̂ explicitly for the same SPQR basis that estimate_mnes_cond uses,
+    Builds M̂ explicitly for the same SPQR basis that _gate_count_qipm1 uses,
     computes the exact condition number via eigvalsh, and checks the eigsh-based
     estimator agrees to within COND_MHAT_TOL.
     """
@@ -401,7 +401,7 @@ def test_estimate_mnes_cond_sparse_accuracy(stem: str) -> None:
     lam = np.linalg.eigvalsh(M_hat_spqr)
     kappa_exact = float(lam[-1] / lam[0]) if lam[0] > 0 else float("inf")
 
-    kappa_est = estimate_mnes_cond(A_sparse)
+    _, _, kappa_est = _gate_count_qipm1(A_sparse)
     rel_err = abs(kappa_est - kappa_exact) / max(kappa_exact, 1.0)
     assert rel_err < COND_MHAT_TOL, (
         f"{stem}: kappa_est={kappa_est:.4g}, kappa_exact(SPQR basis)={kappa_exact:.4g}, "

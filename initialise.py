@@ -161,6 +161,57 @@ def _find_initial_triple_clique(
     return x, y, s
 
 
+def _find_initial_triple_independent_set(
+    A: csr_matrix,
+    b: np.ndarray,
+    c: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Independent set specialisation: x = 0.25 for all primal variables; (y, s) satisfy dual constraint s = c - A'y with s > 0.
+
+    The IS LP has variables x_v in [0,1] with edge constraints x_u + x_v <= 1; at x_v = 0.25,
+    each edge constraint has slack 0.5. Same binary-relaxation structure as clique, so 0.25 is
+    the natural analytic-centre proxy.
+    """
+    _, n = A.shape
+    x = np.full(n, 0.25, dtype=np.float64)
+    y, s = _find_dual_feasible_strict(A, c)
+    return x, y, s
+
+
+def _find_initial_triple_vertex_cover(
+    A: csr_matrix,
+    b: np.ndarray,
+    c: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Vertex cover specialisation: x = 0.75 for all primal variables; (y, s) satisfy dual constraint s = c - A'y with s > 0.
+
+    The VC LP has constraints x_u + x_v >= 1 with x_v in [0, 1]; the fractional optimum is x_v = 0.5.
+    Setting x = 0.75 places all variables in the strict interior: edge slacks = 0.5 > 0,
+    upper-bound slacks = 0.25 > 0.
+    """
+    _, n = A.shape
+    x = np.full(n, 0.75, dtype=np.float64)
+    y, s = _find_dual_feasible_strict(A, c)
+    return x, y, s
+
+
+def _find_initial_triple_max_flow(
+    A: csr_matrix,
+    b: np.ndarray,
+    c: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Max-flow specialisation: x = 0.5 for all primal variables; (y, s) satisfy dual constraint s = c - A'y with s > 0.
+
+    The max-flow LP has arc flow variables in [0, capacity_e] with flow-conservation equalities.
+    Setting x = 0.5 places flows and capacity-slack variables at the midpoint of their bounds,
+    giving a well-centred interior starting point independent of individual arc capacities.
+    """
+    _, n = A.shape
+    x = np.full(n, 0.5, dtype=np.float64)
+    y, s = _find_dual_feasible_strict(A, c)
+    return x, y, s
+
+
 def selfdual_embedding(
     A: csr_matrix,
     b: np.ndarray,
@@ -265,6 +316,12 @@ def _initialise_instance_from_path(
     emb_lp = None
     if instance_class == "clique":
         x, y, s = _find_initial_triple_clique(A, b, c)
+    elif instance_class == "independent_set":
+        x, y, s = _find_initial_triple_independent_set(A, b, c)
+    elif instance_class == "vertex_cover":
+        x, y, s = _find_initial_triple_vertex_cover(A, b, c)
+    elif instance_class == "max_flow":
+        x, y, s = _find_initial_triple_max_flow(A, b, c)
     else:
         try:
             x, y, s = find_initial_triple(A, b, c)

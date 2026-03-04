@@ -33,8 +33,8 @@ def _solve_mps(path: Path) -> float:
     return elapsed
 
 
-def _solve_std(path: Path) -> float:
-    """Load .std standard-form LP, build HiGHS model, run solver. Return solve time in seconds."""
+def _solve_std(path: Path) -> tuple[float, np.ndarray, np.ndarray, np.ndarray]:
+    """Load .std standard-form LP, build HiGHS model, run solver. Return (elapsed, x, y, s)."""
     data = np.load(path)
     c = np.asarray(data["c"], dtype=np.float64).ravel()
     b = np.asarray(data["b"], dtype=np.float64).ravel()
@@ -68,7 +68,11 @@ def _solve_std(path: Path) -> float:
         elapsed = time.perf_counter() - t0
         if status != highspy.HighsStatus.kOk and status != highspy.HighsStatus.kWarning:
             raise RuntimeError(f"HiGHS solve failed: {status}")
-    return elapsed
+    sol = h.getSolution()
+    x = np.asarray(sol.col_value, dtype=np.float64).ravel()
+    y = np.asarray(sol.row_dual, dtype=np.float64).ravel()
+    s = np.asarray(sol.col_dual, dtype=np.float64).ravel()
+    return elapsed, x, y, s
 
 
 def _solve_instance_from_path(path: Path) -> None:
@@ -82,8 +86,10 @@ def _solve_instance_from_path(path: Path) -> None:
         elapsed = _solve_mps(path)
         data_key = "runtime_highs_mps"
     elif suffix == ".std":
-        elapsed = _solve_std(path)
+        elapsed, x, y, s = _solve_std(path)
         data_key = "runtime_highs_std"
+        with open(path.with_suffix(".opt"), "wb") as f:
+            np.savez_compressed(f, x=x, y=y, s=s)
     else:
         raise ValueError(f"Unsupported instance format: {suffix}. Use .mps or .std.")
 

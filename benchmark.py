@@ -24,7 +24,7 @@ def _gate_count_qipm1(A: csr_matrix) -> tuple[int, int, float]:
     M̂ is m×m and generically dense, so d = m.
     """
     import sparseqr
-    from scipy.sparse.linalg import ArpackNoConvergence, LinearOperator, eigsh, splu
+    from scipy.sparse.linalg import LinearOperator, eigsh, splu
 
     A = csr_matrix(A, dtype=np.float64)
     m, n = A.shape
@@ -63,23 +63,12 @@ def _gate_count_qipm1(A: csr_matrix) -> tuple[int, int, float]:
             return v + _fbar_mv(_fbar_rmv(v))
 
         M_op = LinearOperator((m, m), matvec=_mhat_mv, dtype=np.float64)
-        lam_max = float(eigsh(M_op, k=1, which="LM")[0][0])
-        if n_N < m:
-            lam_min = 1.0  # rank(F̄F̄ᵀ) < m → null space with eigenvalue 1
-        else:
-            try:
-                lam_min = float(eigsh(M_op, k=1, which="SM", maxiter=10 * m, tol=1e-4)[0][0])
-            except ArpackNoConvergence as e:
-                lam_min = float(e.eigenvalues[0]) if len(e.eigenvalues) else 1.0
-        k = lam_max / lam_min if lam_min > 0.0 else float("inf")
+        k = float(eigsh(M_op, k=1, which="LM")[0][0])
 
-    if math.isfinite(k):
-        count: int | None = int(
-            (gate_count_qlsa(d=d, k=k, epsilon=_EPSILON) + gate_count_state_preparation(np.arange(1.0, m + 1)))
-            * (m - 1) / _EPSILON**2
-        )
-    else:
-        count = None
+    count = int(
+        (gate_count_qlsa(d=d, k=k, epsilon=_EPSILON) + gate_count_state_preparation(np.arange(1.0, m + 1)))
+        * (m - 1) / _EPSILON**2
+    )
     return count, d, k
 
 
@@ -95,7 +84,7 @@ def _gate_count_qipm2(A: csr_matrix) -> tuple[int, int, float]:
     - z_λ columns have m entries in B-rows (dense A_B⁻¹ A_N column) + 1 in N-rows.
     """
     import sparseqr
-    from scipy.sparse.linalg import ArpackNoConvergence, LinearOperator, svds, splu
+    from scipy.sparse.linalg import LinearOperator, svds, splu
 
     A = csr_matrix(A, dtype=np.float64)
     m, n = A.shape
@@ -153,20 +142,11 @@ def _gate_count_qipm2(A: csr_matrix) -> tuple[int, int, float]:
         return out
 
     M_op = LinearOperator((n, n), matvec=_matvec, rmatvec=_rmatvec, dtype=np.float64)
-    sv_max = float(svds(M_op, k=1, which="LM", return_singular_vectors=False)[0])
-    try:
-        sv_min = float(svds(M_op, k=1, which="SM", maxiter=10 * n, tol=1e-4, return_singular_vectors=False)[0])
-    except ArpackNoConvergence as e:
-        sv_min = float(e.eigenvalues[0]) if len(e.eigenvalues) else 0.0
-    k = sv_max / sv_min if sv_min > 0.0 else float("inf")
-
-    if math.isfinite(k):
-        count: int | None = int(
-            (gate_count_qlsa(d=d, k=k, epsilon=_EPSILON) + gate_count_state_preparation(np.arange(1.0, n + 1)))
-            * (n - 1) / _EPSILON**2
-        )
-    else:
-        count = None
+    k = float(svds(M_op, k=1, which="LM", return_singular_vectors=False)[0])
+    count = int(
+        (gate_count_qlsa(d=d, k=k, epsilon=_EPSILON) + gate_count_state_preparation(np.arange(1.0, n + 1)))
+        * (n - 1) / _EPSILON**2
+    )
     return count, d, k
 
 

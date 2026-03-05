@@ -322,6 +322,21 @@ def transform_all_instance_classes(
         transform_instance_class(name, root)
 
 
+def clear_std_files(
+    instance_classes: list[str] | None = None,
+    cache_dir: str | Path | None = None,
+) -> None:
+    """Delete all .std files under cache_dir (or a subset of instance classes)."""
+    root = Path(cache_dir).resolve() if cache_dir is not None else Path("cache_dir").resolve()
+    if not root.is_dir():
+        raise FileNotFoundError(f"Cache directory not found: {root}")
+
+    search_roots = [root / name for name in instance_classes] if instance_classes else [root]
+    for search_root in search_roots:
+        for f in search_root.rglob("*.std"):
+            f.unlink()
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Transform MPS instances to standard-form LP.")
@@ -336,8 +351,19 @@ if __name__ == "__main__":
         default=None,
         help="Cache directory (default: cache_dir in current directory).",
     )
-    args = parser.parse_args()
-    transform_all_instance_classes(
-        instance_classes=args.instance_classes or None,
-        cache_dir=args.cache_dir,
+    parser.add_argument(
+        "--clear",
+        action="store_true",
+        help="Delete all .std files instead of transforming. Other flags are ignored.",
     )
+    args = parser.parse_args()
+    if args.clear:
+        clear_std_files(
+            instance_classes=args.instance_classes or None,
+            cache_dir=args.cache_dir,
+        )
+    else:
+        transform_all_instance_classes(
+            instance_classes=args.instance_classes or None,
+            cache_dir=args.cache_dir,
+        )

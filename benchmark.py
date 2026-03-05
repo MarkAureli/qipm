@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +14,8 @@ from tqdm import tqdm
 from helpers.gate_count_qlsa import gate_count_qlsa
 from helpers.gate_count_state_prep import gate_count_state_preparation
 
+_EPSILON = 1e-1  # precision shared by QLSA and outer Newton-step count
+
 
 def _gate_count_qipm1(A: csr_matrix) -> tuple[int, int, float]:
     """Return (gate_count, sparsity, cond) for qipm1.
@@ -21,7 +24,7 @@ def _gate_count_qipm1(A: csr_matrix) -> tuple[int, int, float]:
     M̂ is m×m and generically dense, so d = m.
     """
     import sparseqr
-    from scipy.sparse.linalg import LinearOperator, eigsh, splu
+    from scipy.sparse.linalg import ArpackNoConvergence, LinearOperator, eigsh, splu
 
     A = csr_matrix(A, dtype=np.float64)
     m, n = A.shape
@@ -61,14 +64,22 @@ def _gate_count_qipm1(A: csr_matrix) -> tuple[int, int, float]:
 
         M_op = LinearOperator((m, m), matvec=_mhat_mv, dtype=np.float64)
         lam_max = float(eigsh(M_op, k=1, which="LM")[0][0])
-        lam_min = 1.0 if n_N < m else float(eigsh(M_op, k=1, which="SM")[0][0])
+        if n_N < m:
+            lam_min = 1.0  # rank(F̄F̄ᵀ) < m → null space with eigenvalue 1
+        else:
+            try:
+                lam_min = float(eigsh(M_op, k=1, which="SM", maxiter=10 * m, tol=1e-4)[0][0])
+            except ArpackNoConvergence as e:
+                lam_min = float(e.eigenvalues[0]) if len(e.eigenvalues) else 1.0
         k = lam_max / lam_min if lam_min > 0.0 else float("inf")
 
-    count = (
-        gate_count_qlsa(d=d, k=k)
-        + gate_count_state_preparation(np.arange(1.0, m + 1))
-        + m
-    )
+    if math.isfinite(k):
+        count: int | None = int(
+            (gate_count_qlsa(d=d, k=k, epsilon=_EPSILON) + gate_count_state_preparation(np.arange(1.0, m + 1)))
+            * (m - 1) / _EPSILON**2
+        )
+    else:
+        count = None
     return count, d, k
 
 
@@ -84,14 +95,17 @@ def _gate_count_qipm2(A: csr_matrix) -> tuple[int, int, float]:
     - z_λ columns have m entries in B-rows (dense A_B⁻¹ A_N column) + 1 in N-rows.
     """
     import sparseqr
-    from scipy.sparse.linalg import LinearOperator, svds, splu
+    from scipy.sparse.linalg import ArpackNoConvergence, LinearOperator, svds, splu
 
     A = csr_matrix(A, dtype=np.float64)
     m, n = A.shape
 
     if n <= 1:
         k = 1.0
-        count = gate_count_qlsa(d=1, k=k) + gate_count_state_preparation(np.array([1.0])) + 1
+        count = int(
+            (gate_count_qlsa(d=1, k=k, epsilon=_EPSILON) + gate_count_state_preparation(np.array([1.0])))
+            * (n - 1) / _EPSILON**2
+        )
         return count, 1, k
 
     _, _, basis_P, effective_rank = sparseqr.qr(A)
@@ -140,14 +154,19 @@ def _gate_count_qipm2(A: csr_matrix) -> tuple[int, int, float]:
 
     M_op = LinearOperator((n, n), matvec=_matvec, rmatvec=_rmatvec, dtype=np.float64)
     sv_max = float(svds(M_op, k=1, which="LM", return_singular_vectors=False)[0])
-    sv_min = float(svds(M_op, k=1, which="SM", return_singular_vectors=False)[0])
+    try:
+        sv_min = float(svds(M_op, k=1, which="SM", maxiter=10 * n, tol=1e-4, return_singular_vectors=False)[0])
+    except ArpackNoConvergence as e:
+        sv_min = float(e.eigenvalues[0]) if len(e.eigenvalues) else 0.0
     k = sv_max / sv_min if sv_min > 0.0 else float("inf")
 
-    count = (
-        gate_count_qlsa(d=d, k=k)
-        + gate_count_state_preparation(np.arange(1.0, n + 1))
-        + n
-    )
+    if math.isfinite(k):
+        count: int | None = int(
+            (gate_count_qlsa(d=d, k=k, epsilon=_EPSILON) + gate_count_state_preparation(np.arange(1.0, n + 1)))
+            * (n - 1) / _EPSILON**2
+        )
+    else:
+        count = None
     return count, d, k
 
 
@@ -189,13 +208,13 @@ def _benchmark_instance_from_path(
         count, sparsity, cond = _gate_count_qipm1(A)
         data["gate_count_qipm1"] = count
         data["sparsity_qipm1"] = sparsity
-        data["cond_qipm1"] = cond
+        data["cond_qipm1"] = None if not math.isfinite(cond) else cond
 
     if variant in ("oss", "both"):
         count, sparsity, cond = _gate_count_qipm2(A)
         data["gate_count_qipm2"] = count
         data["sparsity_qipm2"] = sparsity
-        data["cond_qipm2"] = cond
+        data["cond_qipm2"] = None if not math.isfinite(cond) else cond
 
     data_path.write_text(json.dumps(data, indent=None))
 
@@ -270,6 +289,38 @@ def benchmark_all_instance_classes(
         benchmark_instance_class(name, variant=variant, cache_dir=root)
 
 
+_BENCHMARK_DATA_KEYS = {
+    "mnes": ("gate_count_qipm1", "sparsity_qipm1", "cond_qipm1"),
+    "oss":  ("gate_count_qipm2", "sparsity_qipm2", "cond_qipm2"),
+}
+
+
+def clear_benchmark_data(
+    instance_classes: list[str] | None = None,
+    cache_dir: str | Path | None = None,
+    variant: str = "both",
+) -> None:
+    """Remove benchmark gate-count entries from .data files."""
+    root = Path(cache_dir).resolve() if cache_dir is not None else Path("cache_dir").resolve()
+    if not root.is_dir():
+        raise FileNotFoundError(f"Cache directory not found: {root}")
+
+    keys = (
+        _BENCHMARK_DATA_KEYS["mnes"] + _BENCHMARK_DATA_KEYS["oss"]
+        if variant == "both"
+        else _BENCHMARK_DATA_KEYS[variant]
+    )
+
+    search_roots = [root / name for name in instance_classes] if instance_classes else [root]
+    for search_root in search_roots:
+        for data_path in search_root.rglob("*.data"):
+            data = json.loads(data_path.read_text())
+            if any(k in data for k in keys):
+                for k in keys:
+                    data.pop(k, None)
+                data_path.write_text(json.dumps(data, indent=None))
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -293,9 +344,21 @@ if __name__ == "__main__":
         default="both",
         help="Which qipm variant to run: 'mnes' (qipm1), 'oss' (qipm2), or 'both' (default).",
     )
-    args = parser.parse_args()
-    benchmark_all_instance_classes(
-        instance_classes=args.instance_classes or None,
-        variant=args.qipm,
-        cache_dir=args.cache_dir,
+    parser.add_argument(
+        "--clear",
+        action="store_true",
+        help="Remove benchmark entries from .data files instead of benchmarking. Other flags are ignored.",
     )
+    args = parser.parse_args()
+    if args.clear:
+        clear_benchmark_data(
+            instance_classes=args.instance_classes or None,
+            cache_dir=args.cache_dir,
+            variant=args.qipm,
+        )
+    else:
+        benchmark_all_instance_classes(
+            instance_classes=args.instance_classes or None,
+            variant=args.qipm,
+            cache_dir=args.cache_dir,
+        )

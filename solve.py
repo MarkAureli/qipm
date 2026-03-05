@@ -180,6 +180,31 @@ def solve_all_instance_classes(
         solve_instance_class(name, root, formats=formats)
 
 
+_SOLVE_DATA_KEYS = ("runtime_highs_mps", "runtime_highs_std")
+
+
+def clear_opt_files(
+    instance_classes: list[str] | None = None,
+    cache_dir: str | Path | None = None,
+) -> None:
+    """Delete all .opt files and remove solve-time entries from .data files."""
+    root = Path(cache_dir).resolve() if cache_dir is not None else Path("cache_dir").resolve()
+    if not root.is_dir():
+        raise FileNotFoundError(f"Cache directory not found: {root}")
+
+    search_roots = [root / name for name in instance_classes] if instance_classes else [root]
+
+    for search_root in search_roots:
+        for f in search_root.rglob("*.opt"):
+            f.unlink()
+        for data_path in search_root.rglob("*.data"):
+            data = json.loads(data_path.read_text())
+            if any(k in data for k in _SOLVE_DATA_KEYS):
+                for k in _SOLVE_DATA_KEYS:
+                    data.pop(k, None)
+                data_path.write_text(json.dumps(data, indent=None))
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -201,9 +226,20 @@ if __name__ == "__main__":
         default="both",
         help="Instance formats to solve: mps, std, or both (default: both).",
     )
-    args = parser.parse_args()
-    solve_all_instance_classes(
-        instance_classes=args.instance_classes or None,
-        cache_dir=args.cache_dir,
-        formats=args.formats,
+    parser.add_argument(
+        "--clear",
+        action="store_true",
+        help="Delete all .opt files instead of solving. Other flags are ignored.",
     )
+    args = parser.parse_args()
+    if args.clear:
+        clear_opt_files(
+            instance_classes=args.instance_classes or None,
+            cache_dir=args.cache_dir,
+        )
+    else:
+        solve_all_instance_classes(
+            instance_classes=args.instance_classes or None,
+            cache_dir=args.cache_dir,
+            formats=args.formats,
+        )

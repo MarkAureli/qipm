@@ -257,8 +257,8 @@ def plot_advantage(
 
     # Small line-type legend for compare mode (lower left, black lines)
     if mode == "compare":
-        h1 = mlines.Line2D([], [], color="black", linestyle="-",  linewidth=1.8, label="qipm1")
-        h2 = mlines.Line2D([], [], color="black", linestyle="--", linewidth=1.8, label="qipm2")
+        h1 = mlines.Line2D([], [], color="black", linestyle="-",  linewidth=1.8, label="QIPM (MNES)")
+        h2 = mlines.Line2D([], [], color="black", linestyle="--", linewidth=1.8, label="QIPM (OSS)")
         ax.legend(handles=[h1, h2], loc="lower left", fontsize=9,
                   framealpha=0.95, edgecolor="#CCCCCC")
 

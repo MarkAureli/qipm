@@ -41,7 +41,8 @@ def load_data(instance_classes: list[str], cache_dir: Path, runtime_key: str) ->
                 data = json.loads(data_path.read_text())
             except (json.JSONDecodeError, OSError):
                 continue
-            if data.get(runtime_key) is None:
+            rt = data.get(runtime_key)
+            if not rt:  # None or 0
                 continue
             if data.get("gate_count_qipm1") is None and data.get("gate_count_qipm2") is None:
                 continue

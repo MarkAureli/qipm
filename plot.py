@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
+import matplotlib.patches as mpatches
 
 GATE_SPEED_RECORD = 5e-11  # seconds — update as needed
 N_POINTS = 500             # x-axis resolution
@@ -164,6 +165,17 @@ def plot_advantage(
     x_min, x_max = compute_x_range(combined)
     t_values = np.geomspace(x_min, x_max, N_POINTS)
 
+    plt.rcParams.update({
+        "font.family": "sans-serif",
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+        "axes.grid": True,
+        "grid.color": "#E0E0E0",
+        "grid.linewidth": 0.8,
+        "axes.facecolor": "#FAFAFA",
+        "figure.facecolor": "white",
+    })
+
     fig, ax = plt.subplots(figsize=(10, 5))
     fallback_colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
     single_class = len(data) == 1
@@ -181,7 +193,7 @@ def plot_advantage(
                 hr = np.array([h for _, h in sub_records], dtype=np.float64)
                 ct = crossover_times(gc, hr)
                 curve = advantage_curve(ct, t_values)
-                ax.plot(t_values, curve, color=color, linestyle=ls)
+                ax.plot(t_values, curve, color=color, linestyle=ls, linewidth=1.8)
         else:
             # Build aligned (gc, highs) pairs
             if mode == "min":
@@ -204,33 +216,32 @@ def plot_advantage(
                 continue
             ct = crossover_times(gc, hr)
             curve = advantage_curve(ct, t_values)
-            ax.plot(t_values, curve, color=color)
+            ax.plot(t_values, curve, color=color, linewidth=1.8)
 
     # Vertical line at record gate speed with rotated annotation
-    ax.axvline(GATE_SPEED_RECORD, color="black", linestyle=":", linewidth=1.2)
+    ax.axvline(GATE_SPEED_RECORD, color="#444444", linestyle=":", linewidth=1.2)
     ax.text(
-        GATE_SPEED_RECORD * 0.88, 50,
+        GATE_SPEED_RECORD * 0.82, 50,
         "current speed record\nfor an isolated gate operation",
-        ha="right", va="center", fontsize=7, rotation=90, color="black",
+        ha="right", va="center", fontsize=7.5, rotation=90, color="#444444",
     )
 
     ax.set_xscale("log")
-    ax.set_xlabel("Gate execution time (s)")
-    ax.set_ylabel("Instances with quantum advantage (%)")
+    ax.set_xlabel("gate execution time (s)", fontsize=11, labelpad=8)
+    ax.set_ylabel("instances with quantum advantage (%)", fontsize=11, labelpad=8)
     ax.set_ylim(-2, 102)
+    ax.set_yticks([0, 25, 50, 75, 100])
+    ax.tick_params(axis="both", labelsize=9.5)
+    ax.spines["left"].set_color("#CCCCCC")
+    ax.spines["bottom"].set_color("#CCCCCC")
 
-    solver_label = next(k for k, v in RUNTIME_KEYS.items() if v == runtime_key)
-    ax.set_title(
-        f"Quantum advantage — {CLASS_LABELS.get(next(iter(data)), next(iter(data)))} ({mode}, vs {solver_label})"
-        if single_class else
-        f"Quantum advantage — all classes ({mode}, vs {solver_label})"
-    )
-
-    # Legend above the plot: one color swatch per class
+    # Legend above the plot: one color patch per class
     class_legend_handles = [
-        mlines.Line2D([], [], color=CLASS_COLORS.get(cls, fallback_colors[i % len(fallback_colors)]),
-                      linewidth=6, solid_capstyle="butt",
-                      label=CLASS_LABELS.get(cls, cls))
+        mpatches.Patch(
+            facecolor=CLASS_COLORS.get(cls, fallback_colors[i % len(fallback_colors)]),
+            edgecolor="none",
+            label=CLASS_LABELS.get(cls, cls),
+        )
         for i, cls in enumerate(data)
     ]
     fig.legend(
@@ -239,14 +250,17 @@ def plot_advantage(
         bbox_to_anchor=(0.5, 1.0),
         ncol=min(len(class_legend_handles), 4),
         frameon=True,
+        framealpha=0.95,
+        edgecolor="#CCCCCC",
         fontsize=9,
     )
 
-    # Small line-type legend for compare mode (bottom-right, black lines)
+    # Small line-type legend for compare mode (lower left, black lines)
     if mode == "compare":
-        h1 = mlines.Line2D([], [], color="black", linestyle="-",  label="qipm1")
-        h2 = mlines.Line2D([], [], color="black", linestyle="--", label="qipm2")
-        ax.legend(handles=[h1, h2], loc="lower left", fontsize=8, framealpha=0.8)
+        h1 = mlines.Line2D([], [], color="black", linestyle="-",  linewidth=1.8, label="qipm1")
+        h2 = mlines.Line2D([], [], color="black", linestyle="--", linewidth=1.8, label="qipm2")
+        ax.legend(handles=[h1, h2], loc="lower left", fontsize=9,
+                  framealpha=0.95, edgecolor="#CCCCCC")
 
     fig.tight_layout()
     fig.subplots_adjust(top=0.78)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot quantum advantage curves: fraction of instances where quantum total time < HiGHS runtime."""
+"""Plot quantum advantage curves: fraction of instances where quantum total time < classical runtime."""
 
 from __future__ import annotations
 
@@ -13,11 +13,17 @@ import matplotlib.lines as mlines
 GATE_SPEED_RECORD = 5e-11  # seconds — update as needed
 N_POINTS = 500             # x-axis resolution
 
+RUNTIME_KEYS = {
+    "glpk":      "runtime_glpk",
+    "highs-std": "runtime_highs_std",
+    "highs-mps": "runtime_highs_mps",
+}
 
-def load_data(instance_classes: list[str], cache_dir: Path) -> dict[str, list[dict]]:
+
+def load_data(instance_classes: list[str], cache_dir: Path, runtime_key: str) -> dict[str, list[dict]]:
     """Load .data JSON files for each class. Returns class -> list of data dicts.
 
-    Skips instances missing gate_count_qipm1, gate_count_qipm2, or runtime_highs_std.
+    Skips instances missing the requested runtime key or both gate counts.
     """
     result: dict[str, list[dict]] = {}
     for cls in instance_classes:
@@ -35,7 +41,7 @@ def load_data(instance_classes: list[str], cache_dir: Path) -> dict[str, list[di
                 data = json.loads(data_path.read_text())
             except (json.JSONDecodeError, OSError):
                 continue
-            if data.get("runtime_highs_std") is None:
+            if data.get(runtime_key) is None:
                 continue
             if data.get("gate_count_qipm1") is None and data.get("gate_count_qipm2") is None:
                 continue
@@ -45,9 +51,9 @@ def load_data(instance_classes: list[str], cache_dir: Path) -> dict[str, list[di
     return result
 
 
-def crossover_times(gate_counts: np.ndarray, highs_runtimes: np.ndarray) -> np.ndarray:
-    """Return runtime_highs_std / gate_count per instance — the gate time at which quantum breaks even."""
-    return highs_runtimes / gate_counts
+def crossover_times(gate_counts: np.ndarray, runtimes: np.ndarray) -> np.ndarray:
+    """Return runtime / gate_count per instance — the gate time at which quantum breaks even."""
+    return runtimes / gate_counts
 
 
 def advantage_curve(ct: np.ndarray, t_values: np.ndarray) -> np.ndarray:
@@ -91,8 +97,9 @@ def plot_advantage(
     mode: str,
     cache_dir: Path,
     output: Path | None,
+    runtime_key: str = "runtime_glpk",
 ) -> None:
-    data = load_data(instance_classes, cache_dir)
+    data = load_data(instance_classes, cache_dir, runtime_key)
     if not data:
         print("No data found.")
         return
@@ -100,7 +107,7 @@ def plot_advantage(
     # Gather all crossover times to compute x range
     all_cts: list[np.ndarray] = []
     for cls, records in data.items():
-        highs = np.array([r["runtime_highs_std"] for r in records], dtype=np.float64)
+        highs = np.array([r[runtime_key] for r in records], dtype=np.float64)
         if mode == "compare":
             for sub in ("qipm1", "qipm2"):
                 gc = _extract_gate_counts(records, sub)
@@ -116,12 +123,12 @@ def plot_advantage(
                         g1 = r.get("gate_count_qipm1")
                         g2 = r.get("gate_count_qipm2")
                         if g1 is not None or g2 is not None:
-                            filtered_highs.append(r["runtime_highs_std"])
+                            filtered_highs.append(r[runtime_key])
                     highs_aligned = np.array(filtered_highs, dtype=np.float64)
                 else:
                     # filter to those with the required gate count
                     key = "gate_count_" + mode
-                    filtered_highs = [r["runtime_highs_std"] for r in records if r.get(key) is not None]
+                    filtered_highs = [r[runtime_key] for r in records if r.get(key) is not None]
                     highs_aligned = np.array(filtered_highs, dtype=np.float64)
                 if len(gc) == len(highs_aligned) and len(gc) > 0:
                     all_cts.append(crossover_times(gc, highs_aligned))
@@ -142,12 +149,12 @@ def plot_advantage(
 
     for i, (cls, records) in enumerate(data.items()):
         color = colors[i % len(colors)]
-        highs = np.array([r["runtime_highs_std"] for r in records], dtype=np.float64)
+        highs = np.array([r[runtime_key] for r in records], dtype=np.float64)
 
         if mode == "compare":
             for sub, ls in (("qipm1", "-"), ("qipm2", "--")):
                 key = "gate_count_" + sub
-                sub_records = [(r, r["runtime_highs_std"]) for r in records if r.get(key) is not None]
+                sub_records = [(r, r[runtime_key]) for r in records if r.get(key) is not None]
                 if not sub_records:
                     continue
                 gc = np.array([r[key] for r, _ in sub_records], dtype=np.float64)
@@ -160,7 +167,7 @@ def plot_advantage(
         else:
             # Build aligned (gc, highs) pairs
             if mode == "min":
-                filtered = [(r, r["runtime_highs_std"]) for r in records
+                filtered = [(r, r[runtime_key]) for r in records
                             if r.get("gate_count_qipm1") is not None or r.get("gate_count_qipm2") is not None]
                 gc_list = []
                 for r, _ in filtered:
@@ -171,7 +178,7 @@ def plot_advantage(
                 hr = np.array([h for _, h in filtered], dtype=np.float64)
             else:
                 key = "gate_count_" + mode
-                filtered = [(r, r["runtime_highs_std"]) for r in records if r.get(key) is not None]
+                filtered = [(r, r[runtime_key]) for r in records if r.get(key) is not None]
                 gc = np.array([r[key] for r, _ in filtered], dtype=np.float64)
                 hr = np.array([h for _, h in filtered], dtype=np.float64)
 
@@ -194,9 +201,10 @@ def plot_advantage(
     ax.set_ylabel("Instances with quantum advantage (%)")
     ax.set_ylim(-2, 102)
 
+    solver_label = next(k for k, v in RUNTIME_KEYS.items() if v == runtime_key)
     if single_class:
         cls_name = next(iter(data))
-        ax.set_title(f"Quantum advantage — {cls_name} ({mode})")
+        ax.set_title(f"Quantum advantage — {cls_name} ({mode}, vs {solver_label})")
         if mode == "compare":
             h1 = mlines.Line2D([], [], color="C0", linestyle="-", label="qipm1")
             h2 = mlines.Line2D([], [], color="C0", linestyle="--", label="qipm2")
@@ -204,7 +212,7 @@ def plot_advantage(
         else:
             ax.legend(handles=[vline])
     else:
-        ax.set_title(f"Quantum advantage — all classes ({mode})")
+        ax.set_title(f"Quantum advantage — all classes ({mode}, vs {solver_label})")
         if mode == "compare":
             # Add line-style legend entries for variants
             h1 = mlines.Line2D([], [], color="gray", linestyle="-", label="qipm1")
@@ -240,8 +248,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mode",
         choices=["qipm1", "qipm2", "compare", "min"],
-        default="qipm1",
-        help="Which gate count to use for the advantage curve (default: qipm1).",
+        default="compare",
+        help="Which gate count to use for the advantage curve (default: compare).",
+    )
+    parser.add_argument(
+        "--solver",
+        choices=list(RUNTIME_KEYS),
+        default="glpk",
+        help="Classical solver runtime to compare against (default: glpk).",
     )
     parser.add_argument(
         "--cache-dir",
@@ -269,4 +283,5 @@ if __name__ == "__main__":
         mode=args.mode,
         cache_dir=cache_dir,
         output=args.output,
+        runtime_key=RUNTIME_KEYS[args.solver],
     )

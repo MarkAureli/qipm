@@ -13,6 +13,28 @@ import matplotlib.lines as mlines
 GATE_SPEED_RECORD = 5e-11  # seconds — update as needed
 N_POINTS = 500             # x-axis resolution
 
+# Display names and colors per instance class (folder name → label/hex color)
+CLASS_LABELS = {
+    "independent_set": "Independent Set",
+    "clique":          "Clique",
+    "vertex_cover":    "Vertex Cover",
+    "max_flow":        "Max Flow",
+    "netlib":          "Netlib",
+    "miplib":          "MIPlib",
+    "stochlp":         "StochLP",
+    "misc":            "Misc",
+}
+CLASS_COLORS = {
+    "independent_set": "#E8A87C",
+    "clique":          "#6B8FA8",
+    "vertex_cover":    "#7AAA7A",
+    "max_flow":        "#C97B7B",
+    "netlib":          "#9080B8",
+    "miplib":          "#A0A0A0",
+    "stochlp":         "#E8A8C8",
+    "misc":            "#B5A882",
+}
+
 RUNTIME_KEYS = {
     "glpk":      "runtime_glpk",
     "highs-std": "runtime_highs_std",
@@ -142,15 +164,12 @@ def plot_advantage(
     x_min, x_max = compute_x_range(combined)
     t_values = np.geomspace(x_min, x_max, N_POINTS)
 
-    fig, ax = plt.subplots(figsize=(9, 5))
-    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    fig, ax = plt.subplots(figsize=(10, 5))
+    fallback_colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
     single_class = len(data) == 1
 
-    legend_handles = []
-
     for i, (cls, records) in enumerate(data.items()):
-        color = colors[i % len(colors)]
-        highs = np.array([r[runtime_key] for r in records], dtype=np.float64)
+        color = CLASS_COLORS.get(cls, fallback_colors[i % len(fallback_colors)])
 
         if mode == "compare":
             for sub, ls in (("qipm1", "-"), ("qipm2", "--")):
@@ -162,9 +181,7 @@ def plot_advantage(
                 hr = np.array([h for _, h in sub_records], dtype=np.float64)
                 ct = crossover_times(gc, hr)
                 curve = advantage_curve(ct, t_values)
-                label = f"{cls} ({sub})" if not single_class else sub
-                (line,) = ax.plot(t_values, curve, color=color, linestyle=ls, label=label)
-                legend_handles.append(line)
+                ax.plot(t_values, curve, color=color, linestyle=ls)
         else:
             # Build aligned (gc, highs) pairs
             if mode == "min":
@@ -187,15 +204,15 @@ def plot_advantage(
                 continue
             ct = crossover_times(gc, hr)
             curve = advantage_curve(ct, t_values)
-            label = cls if not single_class else None
-            (line,) = ax.plot(t_values, curve, color=color, label=label)
-            if not single_class:
-                legend_handles.append(line)
+            ax.plot(t_values, curve, color=color)
 
-    # Vertical line at record gate speed
-    vline = ax.axvline(GATE_SPEED_RECORD, color="black", linestyle=":", linewidth=1.2,
-                       label=f"Record gate speed ({GATE_SPEED_RECORD:.0e} s)")
-    legend_handles.append(vline)
+    # Vertical line at record gate speed with rotated annotation
+    ax.axvline(GATE_SPEED_RECORD, color="black", linestyle=":", linewidth=1.2)
+    ax.text(
+        GATE_SPEED_RECORD * 0.88, 50,
+        "current speed record\nfor an isolated gate operation",
+        ha="right", va="center", fontsize=7, rotation=90, color="black",
+    )
 
     ax.set_xscale("log")
     ax.set_xlabel("Gate execution time (s)")
@@ -203,31 +220,36 @@ def plot_advantage(
     ax.set_ylim(-2, 102)
 
     solver_label = next(k for k, v in RUNTIME_KEYS.items() if v == runtime_key)
-    if single_class:
-        cls_name = next(iter(data))
-        ax.set_title(f"Quantum advantage — {cls_name} ({mode}, vs {solver_label})")
-        if mode == "compare":
-            h1 = mlines.Line2D([], [], color="C0", linestyle="-", label="qipm1")
-            h2 = mlines.Line2D([], [], color="C0", linestyle="--", label="qipm2")
-            ax.legend(handles=[h1, h2, vline])
-        else:
-            ax.legend(handles=[vline])
-    else:
-        ax.set_title(f"Quantum advantage — all classes ({mode}, vs {solver_label})")
-        if mode == "compare":
-            # Add line-style legend entries for variants
-            h1 = mlines.Line2D([], [], color="gray", linestyle="-", label="qipm1")
-            h2 = mlines.Line2D([], [], color="gray", linestyle="--", label="qipm2")
-            # class color swatches
-            class_handles = [
-                mlines.Line2D([], [], color=colors[i % len(colors)], linestyle="-", label=cls)
-                for i, cls in enumerate(data)
-            ]
-            ax.legend(handles=class_handles + [h1, h2, vline], fontsize=8)
-        else:
-            ax.legend(handles=legend_handles, fontsize=8)
+    ax.set_title(
+        f"Quantum advantage — {CLASS_LABELS.get(next(iter(data)), next(iter(data)))} ({mode}, vs {solver_label})"
+        if single_class else
+        f"Quantum advantage — all classes ({mode}, vs {solver_label})"
+    )
+
+    # Legend above the plot: one color swatch per class
+    class_legend_handles = [
+        mlines.Line2D([], [], color=CLASS_COLORS.get(cls, fallback_colors[i % len(fallback_colors)]),
+                      linewidth=6, solid_capstyle="butt",
+                      label=CLASS_LABELS.get(cls, cls))
+        for i, cls in enumerate(data)
+    ]
+    fig.legend(
+        handles=class_legend_handles,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.0),
+        ncol=min(len(class_legend_handles), 4),
+        frameon=True,
+        fontsize=9,
+    )
+
+    # Small line-type legend for compare mode (bottom-right, black lines)
+    if mode == "compare":
+        h1 = mlines.Line2D([], [], color="black", linestyle="-",  label="qipm1")
+        h2 = mlines.Line2D([], [], color="black", linestyle="--", label="qipm2")
+        ax.legend(handles=[h1, h2], loc="lower left", fontsize=8, framealpha=0.8)
 
     fig.tight_layout()
+    fig.subplots_adjust(top=0.78)
     if output is not None:
         fig.savefig(output, dpi=150)
         print(f"Saved to {output}")

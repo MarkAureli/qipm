@@ -120,7 +120,7 @@ def plot_advantage(
     instance_classes: list[str],
     mode: str,
     cache_dir: Path,
-    output: Path | None,
+    output: Path,
     runtime_key: str = "runtime_glpk",
 ) -> None:
     data = load_data(instance_classes, cache_dir, runtime_key)
@@ -264,11 +264,8 @@ def plot_advantage(
 
     fig.tight_layout()
     fig.subplots_adjust(top=0.78)
-    if output is not None:
-        fig.savefig(output, dpi=150)
-        print(f"Saved to {output}")
-    else:
-        plt.show()
+    fig.savefig(output, dpi=150)
+    print(f"Saved to {output}")
 
 
 if __name__ == "__main__":
@@ -303,8 +300,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output",
         type=Path,
-        default=None,
-        help="Save figure to this path instead of showing interactively.",
+        default=Path("plot.pdf"),
+        help="Path to save the figure (default: plot.pdf).",
     )
     args = parser.parse_args()
 

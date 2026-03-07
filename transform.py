@@ -47,6 +47,12 @@ def _lp_to_standard_form(
     a_index = np.asarray(a_index, dtype=np.int64).ravel()
     a_value = np.asarray(a_value, dtype=np.float64).ravel()
 
+    # Precompute dense row index mapping: fully-free rows (lo=-inf, hi=inf) contribute
+    # no constraint in standard form and are dropped entirely.
+    free_row = (row_lower <= -inf) & (row_upper >= inf)
+    row_map = np.where(free_row, -1, np.cumsum(~free_row) - 1).astype(np.int64)
+    m_base = int((~free_row).sum())  # number of non-free original rows
+
     new_col_count = 0
     c_list: list[float] = []
     b_list: list[float] = []
@@ -80,7 +86,7 @@ def _lp_to_standard_form(
             j1 = add_var(cj)
             j2 = add_var(0.0)
             width = uj - lj
-            r = num_row + len(extra_b_list)
+            r = m_base + len(extra_b_list)
             extra_b_list.append(width)
             extra_row_list.append(r)
             extra_col_list.append(j1)
@@ -91,9 +97,11 @@ def _lp_to_standard_form(
             for idx in range(len(row_ind)):
                 i = row_ind[idx]
                 v = row_vals[idx]
-                row_list.append(i)
-                col_list.append(j1)
-                val_list.append(v)
+                ri = row_map[i]
+                if ri >= 0:
+                    row_list.append(ri)
+                    col_list.append(j1)
+                    val_list.append(v)
                 row_constant[i] += v * lj
             continue
 
@@ -102,9 +110,11 @@ def _lp_to_standard_form(
             for idx in range(len(row_ind)):
                 i = row_ind[idx]
                 v = row_vals[idx]
-                row_list.append(i)
-                col_list.append(j1)
-                val_list.append(v)
+                ri = row_map[i]
+                if ri >= 0:
+                    row_list.append(ri)
+                    col_list.append(j1)
+                    val_list.append(v)
                 row_constant[i] += v * lj
             continue
         if lj <= -inf and uj < inf:
@@ -112,9 +122,11 @@ def _lp_to_standard_form(
             for idx in range(len(row_ind)):
                 i = row_ind[idx]
                 v = row_vals[idx]
-                row_list.append(i)
-                col_list.append(j1)
-                val_list.append(-v)
+                ri = row_map[i]
+                if ri >= 0:
+                    row_list.append(ri)
+                    col_list.append(j1)
+                    val_list.append(-v)
                 row_constant[i] += v * uj
             continue
         # Free variable
@@ -123,28 +135,31 @@ def _lp_to_standard_form(
         for idx in range(len(row_ind)):
             i = row_ind[idx]
             v = row_vals[idx]
-            row_list.append(i)
-            col_list.append(j_plus)
-            val_list.append(v)
-            row_list.append(i)
-            col_list.append(j_minus)
-            val_list.append(-v)
+            ri = row_map[i]
+            if ri >= 0:
+                row_list.append(ri)
+                col_list.append(j_plus)
+                val_list.append(v)
+                row_list.append(ri)
+                col_list.append(j_minus)
+                val_list.append(-v)
 
     # Add slacks and set b for original rows
     for i in range(num_row):
         lo = row_lower[i]
         hi = row_upper[i]
+        ri = row_map[i]
         if lo == hi:
             b_list.append(lo - row_constant[i])
         elif lo <= -inf and hi < inf:
             j_slack = add_var(0.0)
-            row_list.append(i)
+            row_list.append(ri)
             col_list.append(j_slack)
             val_list.append(1.0)
             b_list.append(hi - row_constant[i])
         elif lo > -inf and hi >= inf:
             j_slack = add_var(0.0)
-            row_list.append(i)
+            row_list.append(ri)
             col_list.append(j_slack)
             val_list.append(-1.0)
             b_list.append(lo - row_constant[i])
@@ -153,12 +168,12 @@ def _lp_to_standard_form(
             pass
         else:
             j_slack = add_var(0.0)
-            row_list.append(i)
+            row_list.append(ri)
             col_list.append(j_slack)
             val_list.append(1.0)
             b_list.append(hi - row_constant[i])
             extra_b_list.append(hi - lo)
-            r = num_row + len(extra_b_list) - 1
+            r = m_base + len(extra_b_list) - 1
             extra_row_list.append(r)
             extra_col_list.append(j_slack)
             extra_val_list.append(1.0)

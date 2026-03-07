@@ -297,25 +297,23 @@ if __name__ == "__main__":
         default=None,
         help="Cache directory (default: cache_dir in current directory).",
     )
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=Path("plot.pdf"),
-        help="Path to save the figure (default: plot.pdf).",
-    )
     args = parser.parse_args()
 
     cache_dir = args.cache_dir if args.cache_dir is not None else Path("cache_dir").resolve()
 
     if args.instance_classes:
         classes = args.instance_classes
+        classes_tag = "-".join(classes)
     else:
         classes = [d.name for d in sorted(cache_dir.iterdir()) if d.is_dir()] if cache_dir.is_dir() else []
+        classes_tag = "all"
+
+    output = Path(f"plot_{classes_tag}_{args.solver}_{args.mode}.pdf")
 
     plot_advantage(
         instance_classes=classes,
         mode=args.mode,
         cache_dir=cache_dir,
-        output=args.output,
+        output=output,
         runtime_key=RUNTIME_KEYS[args.solver],
     )

@@ -145,6 +145,8 @@ def _write_data_files_from_evaluation(clone_path: Path, cache_path: Path) -> Non
                         if resolved is None:
                             continue
                         cache_class, stem = resolved
+                        if stem.lower().endswith(".zip"):
+                            continue
                         instance_dir = cache_path / cache_class / stem
                         instance_dir.mkdir(parents=True, exist_ok=True)
                         data_path = instance_dir / f"{stem}.data"
@@ -171,12 +173,6 @@ def extract(clone_path: Path, cache_path: Path) -> None:
         zip_path = mps_dir / f"{zip_basename}.zip"
         if zip_path.exists():
             _copy_zip_mps_by_filename(zip_path, cache_path)
-
-    # External repo has an empty/broken stochlp entry (stoprobs.zip): no .mps or broken file.
-    # Remove the instance subfolder entirely so transform does not expect one .mps there.
-    stoprobs_dir = cache_path / "stochlp" / "stoprobs.zip"
-    if stoprobs_dir.is_dir():
-        shutil.rmtree(stoprobs_dir, ignore_errors=True)
 
     _write_data_files_from_evaluation(clone_path, cache_path)
 

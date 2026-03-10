@@ -337,6 +337,33 @@ def transform_all_instance_classes(
         transform_instance_class(name, root)
 
 
+def show_transform_status(
+    instance_classes: list[str] | None = None,
+    cache_dir: str | Path | None = None,
+) -> None:
+    """Print how many instances per class have a .std file.
+
+    For each instance class, prints "<class>: x/total".
+    """
+    root = Path(cache_dir).resolve() if cache_dir is not None else Path("cache_dir").resolve()
+    if not root.is_dir():
+        raise FileNotFoundError(f"Cache directory not found: {root}")
+
+    if instance_classes is None:
+        instance_classes = [f.name for f in sorted(root.iterdir()) if f.is_dir()]
+
+    for cls in instance_classes:
+        folder = root / cls
+        if not folder.is_dir():
+            print(f"{cls}: directory not found")
+            continue
+
+        subdirs = sorted(d for d in folder.iterdir() if d.is_dir())
+        total = len(subdirs)
+        done = sum(1 for d in subdirs if any(d.glob("*.std")))
+        print(f"{cls}: {done}/{total}")
+
+
 def clear_std_files(
     instance_classes: list[str] | None = None,
     cache_dir: str | Path | None = None,
@@ -371,8 +398,18 @@ if __name__ == "__main__":
         action="store_true",
         help="Delete all .std files instead of transforming. Other flags are ignored.",
     )
+    parser.add_argument(
+        "--show",
+        action="store_true",
+        help="Show how many instances per class have a .std file. Other flags are ignored.",
+    )
     args = parser.parse_args()
-    if args.clear:
+    if args.show:
+        show_transform_status(
+            instance_classes=args.instance_classes or None,
+            cache_dir=args.cache_dir,
+        )
+    elif args.clear:
         clear_std_files(
             instance_classes=args.instance_classes or None,
             cache_dir=args.cache_dir,

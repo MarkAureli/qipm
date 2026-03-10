@@ -11,10 +11,30 @@ import numpy as np
 from scipy.sparse import csr_matrix
 from tqdm import tqdm
 
-from helpers.gate_count_qlsa import gate_count_qlsa
-from helpers.gate_count_state_prep import gate_count_state_preparation
-
 _EPSILON = 1e-1  # precision shared by QLSA and outer Newton-step count
+
+
+def gate_count_qlsa(
+    *,
+    d: int,
+    k: float,
+    epsilon: float = 1e-1,
+) -> int:
+    """
+    Return the QLSA Chebyshev query count.
+
+    Args:
+        d: Maximum sparsity (non-zeros per row or column) of M̂.
+        k: Condition number (2-norm) of M̂.
+        epsilon: Precision (default 1e-1).
+
+    Returns:
+        int: The number of queries that QLS Chebyshev makes to O_H and O_F (P_A).
+    """
+    binst = math.ceil(math.log(d * k / epsilon) * (d * k) ** 2)
+    insqrt = binst * math.log(4 * binst / epsilon)
+    j0_val = int(math.ceil(math.sqrt(insqrt)))
+    return 8 * j0_val
 
 
 def _gate_count_qipm1(A: csr_matrix) -> tuple[int, int, float]:
@@ -65,10 +85,7 @@ def _gate_count_qipm1(A: csr_matrix) -> tuple[int, int, float]:
         M_op = LinearOperator((m, m), matvec=_mhat_mv, dtype=np.float64)
         k = float(eigsh(M_op, k=1, which="LM")[0][0])
 
-    count = int(
-        (gate_count_qlsa(d=d, k=k, epsilon=_EPSILON) + gate_count_state_preparation(np.arange(1.0, m + 1)))
-        * (m - 1) / _EPSILON**2
-    )
+    count = int(gate_count_qlsa(d=d, k=k, epsilon=_EPSILON) * (m - 1) / _EPSILON**2)
     return count, d, k
 
 
@@ -91,10 +108,7 @@ def _gate_count_qipm2(A: csr_matrix) -> tuple[int, int, float]:
 
     if n <= 1:
         k = 1.0
-        count = int(
-            (gate_count_qlsa(d=1, k=k, epsilon=_EPSILON) + gate_count_state_preparation(np.array([1.0])))
-            * (n - 1) / _EPSILON**2
-        )
+        count = int(gate_count_qlsa(d=1, k=k, epsilon=_EPSILON) * (n - 1) / _EPSILON**2)
         return count, 1, k
 
     _, _, basis_P, effective_rank = sparseqr.qr(A)
@@ -143,12 +157,8 @@ def _gate_count_qipm2(A: csr_matrix) -> tuple[int, int, float]:
 
     M_op = LinearOperator((n, n), matvec=_matvec, rmatvec=_rmatvec, dtype=np.float64)
     k = float(svds(M_op, k=1, which="LM", return_singular_vectors=False)[0])
-    count = int(
-        (gate_count_qlsa(d=d, k=k, epsilon=_EPSILON) + gate_count_state_preparation(np.arange(1.0, n + 1)))
-        * (n - 1) / _EPSILON**2
-    )
+    count = int(gate_count_qlsa(d=d, k=k, epsilon=_EPSILON) * (n - 1) / _EPSILON**2)
     return count, d, k
-
 
 
 def _load_standard_form(path: Path) -> csr_matrix:

@@ -275,6 +275,47 @@ _BENCHMARK_DATA_KEYS = {
 }
 
 
+def show_benchmark_status(
+    instance_classes: list[str] | None = None,
+    variant: str = "both",
+    cache_dir: str | Path | None = None,
+) -> None:
+    """Print how many instances per class have all benchmark keys present in their .data files.
+
+    For each instance class, prints one line per active variant showing
+    "<class>  [mnes: x/total]  [oss: x/total]".
+    An instance counts as done when all _BENCHMARK_DATA_KEYS for the variant are present.
+    """
+    root = Path(cache_dir).resolve() if cache_dir is not None else Path("cache_dir").resolve()
+    if not root.is_dir():
+        raise FileNotFoundError(f"Cache directory not found: {root}")
+
+    if instance_classes is None:
+        instance_classes = [f.name for f in sorted(root.iterdir()) if f.is_dir()]
+
+    active_variants = ["mnes", "oss"] if variant == "both" else [variant]
+
+    for cls in instance_classes:
+        folder = root / cls
+        if not folder.is_dir():
+            print(f"{cls}: directory not found")
+            continue
+
+        subdirs = sorted(d for d in folder.iterdir() if d.is_dir())
+        total = len(subdirs)
+
+        counts: dict[str, int] = {v: 0 for v in active_variants}
+        for subdir in subdirs:
+            data_files = list(subdir.glob("*.data"))
+            data = json.loads(data_files[0].read_text()) if data_files else {}
+            for v in active_variants:
+                if all(k in data for k in _BENCHMARK_DATA_KEYS[v]):
+                    counts[v] += 1
+
+        parts = "  ".join(f"{v}: {counts[v]}/{total}" for v in active_variants)
+        print(f"{cls}:  {parts}")
+
+
 def clear_benchmark_data(
     instance_classes: list[str] | None = None,
     cache_dir: str | Path | None = None,
@@ -329,8 +370,19 @@ if __name__ == "__main__":
         action="store_true",
         help="Remove benchmark entries from .data files instead of benchmarking. Other flags are ignored.",
     )
+    parser.add_argument(
+        "--show",
+        action="store_true",
+        help="Show how many instances per class have benchmark data for the selected variant(s). Other flags are ignored.",
+    )
     args = parser.parse_args()
-    if args.clear:
+    if args.show:
+        show_benchmark_status(
+            instance_classes=args.instance_classes or None,
+            variant=args.qipm,
+            cache_dir=args.cache_dir,
+        )
+    elif args.clear:
         clear_benchmark_data(
             instance_classes=args.instance_classes or None,
             cache_dir=args.cache_dir,

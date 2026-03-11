@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import math
-import signal
+import multiprocessing
 from pathlib import Path
 
 import numpy as np
@@ -39,21 +39,9 @@ def gate_count_qlsa(
     return 8 * j0_val
 
 
-def _preprocess_basis(A: csr_matrix):
-    """Shared preprocessing for both qipm variants.
-
-    Returns (A, m, n, B, N, n_N, A_B_lu, A_N) after SPQR basis selection,
-    optional rank-deficiency row reduction, and LU factorisation of A_B.
-    Raises RuntimeError if preprocessing exceeds _PREPROCESS_TIMEOUT seconds.
-    """
+def _preprocess_basis_worker(queue: multiprocessing.Queue, A: csr_matrix) -> None:
+    """Subprocess worker for _preprocess_basis; puts result or exception into queue."""
     import sparseqr
-    from scipy.sparse.linalg import splu
-
-    def _timeout_handler(signum, frame):
-        raise RuntimeError(f"Basis preprocessing exceeded {_PREPROCESS_TIMEOUT // 60}-minute time limit")
-
-    old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
-    signal.alarm(_PREPROCESS_TIMEOUT)
     try:
         A = csr_matrix(A, dtype=np.float64)
         m, n = A.shape
@@ -73,13 +61,43 @@ def _preprocess_basis(A: csr_matrix):
         N = np.where(N_mask)[0]
         n_N = len(N)
 
-        A_B_lu = splu(A[:, B].tocsc())
-        A_N = A[:, N]
+        queue.put((A, m, n, B, N, n_N, A[:, B].tocsc(), A[:, N]))
+    except Exception as exc:  # noqa: BLE001
+        queue.put(exc)
 
-        return A, m, n, B, N, n_N, A_B_lu, A_N
+
+def _preprocess_basis(A: csr_matrix):
+    """Shared preprocessing for both qipm variants.
+
+    Returns (A, m, n, B, N, n_N, A_B_lu, A_N) after SPQR basis selection,
+    optional rank-deficiency row reduction, and LU factorisation of A_B.
+    Raises RuntimeError if preprocessing exceeds _PREPROCESS_TIMEOUT seconds.
+    """
+    from scipy.sparse.linalg import splu
+
+    q: multiprocessing.Queue = multiprocessing.Queue()
+    p = multiprocessing.Process(target=_preprocess_basis_worker, args=(q, A))
+    p.start()
+    try:
+        p.join(_PREPROCESS_TIMEOUT)
+        if p.is_alive():
+            p.terminate()
+            p.join(5)
+            if p.is_alive():
+                p.kill()
+                p.join()
+            raise RuntimeError(
+                f"Basis preprocessing exceeded {_PREPROCESS_TIMEOUT // 60}-minute time limit"
+            )
+        result = q.get_nowait()
+        if isinstance(result, Exception):
+            raise result
+        A, m, n, B, N, n_N, A_B_csc, A_N = result
+        return A, m, n, B, N, n_N, splu(A_B_csc), A_N
     finally:
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, old_handler)
+        q.close()
+        q.cancel_join_thread()
+        p.close()
 
 
 def _gate_count_qipm1_from_basis(

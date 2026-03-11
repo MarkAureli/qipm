@@ -73,23 +73,19 @@ def _preprocess_basis(A: csr_matrix):
     optional rank-deficiency row reduction, and LU factorisation of A_B.
     Raises RuntimeError if preprocessing exceeds _PREPROCESS_TIMEOUT seconds.
     """
+    import queue as _queue
     from scipy.sparse.linalg import splu
 
     q: multiprocessing.Queue = multiprocessing.Queue()
     p = multiprocessing.Process(target=_preprocess_basis_worker, args=(q, A))
     p.start()
     try:
-        p.join(_PREPROCESS_TIMEOUT)
-        if p.is_alive():
-            p.terminate()
-            p.join(5)
-            if p.is_alive():
-                p.kill()
-                p.join()
+        try:
+            result = q.get(timeout=_PREPROCESS_TIMEOUT)
+        except _queue.Empty:
             raise RuntimeError(
                 f"Basis preprocessing exceeded {_PREPROCESS_TIMEOUT // 60}-minute time limit"
             )
-        result = q.get_nowait()
         if isinstance(result, Exception):
             raise result
         A, m, n, B, N, n_N, A_B_csc, A_N = result
@@ -97,6 +93,14 @@ def _preprocess_basis(A: csr_matrix):
     finally:
         q.close()
         q.cancel_join_thread()
+        if p.is_alive():
+            p.terminate()
+            p.join(5)
+            if p.is_alive():
+                p.kill()
+                p.join()
+        else:
+            p.join()
         p.close()
 
 

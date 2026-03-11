@@ -120,7 +120,9 @@ def _solve_with_timeout(path: Path) -> bool:
         if p.is_alive():
             p.kill()
             p.join()
+        p.close()
         return False
+    p.close()
     return True
 
 

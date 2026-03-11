@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
 import time
 from pathlib import Path
 
@@ -11,6 +12,8 @@ import highspy
 import numpy as np
 from scipy.sparse import csr_matrix
 from tqdm import tqdm
+
+SOLVE_TIMEOUT = 600.0  # 10 minutes per file
 
 try:
     _HIGHS_INF = highspy.kHighsInf
@@ -102,6 +105,25 @@ def _solve_instance_from_path(path: Path) -> None:
     data_path.write_text(json.dumps(data, indent=None))
 
 
+def _solve_with_timeout(path: Path) -> bool:
+    """Run _solve_instance_from_path in a subprocess with SOLVE_TIMEOUT.
+
+    Returns True if completed within the time limit, False if timed out.
+    Exceptions in the worker are printed as warnings and treated as non-timeout failures (return True).
+    """
+    p = multiprocessing.Process(target=_solve_instance_from_path, args=(path,))
+    p.start()
+    p.join(SOLVE_TIMEOUT)
+    if p.is_alive():
+        p.terminate()
+        p.join(5)
+        if p.is_alive():
+            p.kill()
+            p.join()
+        return False
+    return True
+
+
 def solve_instance(
     instance_class: str,
     instance_name: str,
@@ -124,13 +146,21 @@ def solve_instance(
     if not instance_dir.is_dir():
         raise FileNotFoundError(f"Instance directory not found: {instance_dir}")
 
-    paths: list[Path] = []
-    if formats in ("mps", "both"):
-        paths.extend(sorted(instance_dir.glob("*.mps")))
-    if formats in ("std", "both"):
-        paths.extend(sorted(instance_dir.glob("*.std")))
-    for p in paths:
-        _solve_instance_from_path(p)
+    mps_paths = sorted(instance_dir.glob("*.mps")) if formats in ("mps", "both") else []
+    std_paths = sorted(instance_dir.glob("*.std")) if formats in ("std", "both") else []
+
+    mps_timed_out = False
+    for p in mps_paths:
+        if not _solve_with_timeout(p):
+            tqdm.write(f"timeout: {p.name} (skipping)")
+            mps_timed_out = True
+
+    if formats == "both" and mps_timed_out:
+        return
+
+    for p in std_paths:
+        if not _solve_with_timeout(p):
+            tqdm.write(f"timeout: {p.name} (skipping)")
 
 
 def solve_instance_class(

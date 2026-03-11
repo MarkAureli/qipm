@@ -74,18 +74,26 @@ def _preprocess_basis(A: csr_matrix):
     Raises RuntimeError if preprocessing exceeds _PREPROCESS_TIMEOUT seconds.
     """
     import queue as _queue
+    import time
     from scipy.sparse.linalg import splu
 
     q: multiprocessing.Queue = multiprocessing.Queue()
     p = multiprocessing.Process(target=_preprocess_basis_worker, args=(q, A))
     p.start()
     try:
-        try:
-            result = q.get(timeout=_PREPROCESS_TIMEOUT)
-        except _queue.Empty:
-            raise RuntimeError(
-                f"Basis preprocessing exceeded {_PREPROCESS_TIMEOUT // 60}-minute time limit"
-            )
+        deadline = time.monotonic() + _PREPROCESS_TIMEOUT
+        result = None
+        while True:
+            try:
+                result = q.get(timeout=0.5)
+                break
+            except _queue.Empty:
+                if not p.is_alive():
+                    raise RuntimeError("Basis preprocessing failed (worker process crashed)")
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        f"Basis preprocessing exceeded {_PREPROCESS_TIMEOUT // 60}-minute time limit"
+                    )
         if isinstance(result, Exception):
             raise result
         A, m, n, B, N, n_N, A_B_csc, A_N = result

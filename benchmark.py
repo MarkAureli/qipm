@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import math
+import signal
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +13,7 @@ from scipy.sparse import csr_matrix
 from tqdm import tqdm
 
 _EPSILON = 1e-1  # precision shared by QLSA and outer Newton-step count
+_PREPROCESS_TIMEOUT = 600  # seconds; basis preprocessing time limit
 
 
 def gate_count_qlsa(
@@ -42,32 +44,42 @@ def _preprocess_basis(A: csr_matrix):
 
     Returns (A, m, n, B, N, n_N, A_B_lu, A_N) after SPQR basis selection,
     optional rank-deficiency row reduction, and LU factorisation of A_B.
+    Raises RuntimeError if preprocessing exceeds _PREPROCESS_TIMEOUT seconds.
     """
     import sparseqr
     from scipy.sparse.linalg import splu
 
-    A = csr_matrix(A, dtype=np.float64)
-    m, n = A.shape
+    def _timeout_handler(signum, frame):
+        raise RuntimeError(f"Basis preprocessing exceeded {_PREPROCESS_TIMEOUT // 60}-minute time limit")
 
-    _, _, basis_P, effective_rank = sparseqr.qr(A)
-    basis_P = np.asarray(basis_P, dtype=np.intp)
+    old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+    signal.alarm(_PREPROCESS_TIMEOUT)
+    try:
+        A = csr_matrix(A, dtype=np.float64)
+        m, n = A.shape
 
-    if effective_rank < m:
-        _, _, P_row, _ = sparseqr.qr(A.T)
-        P_row = np.asarray(P_row, dtype=np.intp)
-        A = A[P_row[:effective_rank], :]
-        m = effective_rank
+        _, _, basis_P, effective_rank = sparseqr.qr(A)
+        basis_P = np.asarray(basis_P, dtype=np.intp)
 
-    B = basis_P[:m]
-    N_mask = np.ones(n, dtype=bool)
-    N_mask[B] = False
-    N = np.where(N_mask)[0]
-    n_N = len(N)
+        if effective_rank < m:
+            _, _, P_row, _ = sparseqr.qr(A.T)
+            P_row = np.asarray(P_row, dtype=np.intp)
+            A = A[P_row[:effective_rank], :]
+            m = effective_rank
 
-    A_B_lu = splu(A[:, B].tocsc())
-    A_N = A[:, N]
+        B = basis_P[:m]
+        N_mask = np.ones(n, dtype=bool)
+        N_mask[B] = False
+        N = np.where(N_mask)[0]
+        n_N = len(N)
 
-    return A, m, n, B, N, n_N, A_B_lu, A_N
+        A_B_lu = splu(A[:, B].tocsc())
+        A_N = A[:, N]
+
+        return A, m, n, B, N, n_N, A_B_lu, A_N
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
 
 
 def _gate_count_qipm1_from_basis(

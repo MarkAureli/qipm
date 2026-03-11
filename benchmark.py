@@ -37,14 +37,14 @@ def gate_count_qlsa(
     return 8 * j0_val
 
 
-def _gate_count_qipm1(A: csr_matrix) -> tuple[int, int, float]:
-    """Return (gate_count, sparsity, cond) for qipm1.
+def _preprocess_basis(A: csr_matrix):
+    """Shared preprocessing for both qipm variants.
 
-    Estimates κ(M̂) via M̂ = I + F̄F̄ᵀ, F̄ = A_B⁻¹ A_N (D_B = D_N = I).
-    M̂ is m×m and generically dense, so d = m.
+    Returns (A, m, n, B, N, n_N, A_B_lu, A_N) after SPQR basis selection,
+    optional rank-deficiency row reduction, and LU factorisation of A_B.
     """
     import sparseqr
-    from scipy.sparse.linalg import LinearOperator, eigsh, splu
+    from scipy.sparse.linalg import splu
 
     A = csr_matrix(A, dtype=np.float64)
     m, n = A.shape
@@ -64,14 +64,30 @@ def _gate_count_qipm1(A: csr_matrix) -> tuple[int, int, float]:
     N = np.where(N_mask)[0]
     n_N = len(N)
 
+    A_B_lu = splu(A[:, B].tocsc())
+    A_N = A[:, N]
+
+    return A, m, n, B, N, n_N, A_B_lu, A_N
+
+
+def _gate_count_qipm1_from_basis(
+    A: csr_matrix,
+    m: int,
+    n: int,
+    B: np.ndarray,
+    N: np.ndarray,
+    n_N: int,
+    A_B_lu,
+    A_N: csr_matrix,
+) -> tuple[int, int, float]:
+    """Compute (gate_count, sparsity, cond) for qipm1 from preprocessed basis."""
+    from scipy.sparse.linalg import LinearOperator, eigsh
+
     d = m  # M̂ is generically dense m×m
 
     if n_N == 0 or m <= 1:
         k = 1.0
     else:
-        A_B_lu = splu(A[:, B].tocsc())
-        A_N = A[:, N]
-
         def _fbar_mv(v: np.ndarray) -> np.ndarray:
             return A_B_lu.solve(np.asarray(A_N @ v, dtype=np.float64).ravel())
 
@@ -89,8 +105,26 @@ def _gate_count_qipm1(A: csr_matrix) -> tuple[int, int, float]:
     return count, d, k
 
 
-def _gate_count_qipm2(A: csr_matrix) -> tuple[int, int, float]:
-    """Return (gate_count, sparsity, cond) for qipm2.
+def _gate_count_qipm1(A: csr_matrix) -> tuple[int, int, float]:
+    """Return (gate_count, sparsity, cond) for qipm1.
+
+    Estimates κ(M̂) via M̂ = I + F̄F̄ᵀ, F̄ = A_B⁻¹ A_N (D_B = D_N = I).
+    M̂ is m×m and generically dense, so d = m.
+    """
+    return _gate_count_qipm1_from_basis(*_preprocess_basis(A))
+
+
+def _gate_count_qipm2_from_basis(
+    A: csr_matrix,
+    m: int,
+    n: int,
+    B: np.ndarray,
+    N: np.ndarray,
+    n_N: int,
+    A_B_lu,
+    A_N: csr_matrix,
+) -> tuple[int, int, float]:
+    """Compute (gate_count, sparsity, cond) for qipm2 from preprocessed basis.
 
     Estimates κ(M) for the OSS matrix M = [-Aᵀ | V] ∈ ℝⁿˣⁿ (x = s = 1).
     V ∈ ℝⁿˣ⁽ⁿ⁻ᵐ⁾ is the null-space basis built from the SPQR pivot basis B:
@@ -100,37 +134,10 @@ def _gate_count_qipm2(A: csr_matrix) -> tuple[int, int, float]:
     - z_y columns of M have the same sparsity as columns of A,
     - z_λ columns have m entries in B-rows (dense A_B⁻¹ A_N column) + 1 in N-rows.
     """
-    import sparseqr
-    from scipy.sparse.linalg import LinearOperator, svds, splu
-
-    A = csr_matrix(A, dtype=np.float64)
-    m, n = A.shape
-
-    if n <= 1:
-        k = 1.0
-        count = int(gate_count_qlsa(d=1, k=k, epsilon=_EPSILON) * (n - 1) / _EPSILON**2)
-        return count, 1, k
-
-    _, _, basis_P, effective_rank = sparseqr.qr(A)
-    basis_P = np.asarray(basis_P, dtype=np.intp)
-
-    if effective_rank < m:
-        _, _, P_row, _ = sparseqr.qr(A.T)
-        P_row = np.asarray(P_row, dtype=np.intp)
-        A = A[P_row[:effective_rank], :]
-        m = effective_rank
-
-    B = basis_P[:m]
-    N_mask = np.ones(n, dtype=bool)
-    N_mask[B] = False
-    N = np.where(N_mask)[0]
-    n_N = len(N)
+    from scipy.sparse.linalg import LinearOperator, svds
 
     # Sparsity: z_y columns mirror A's column nnz; z_λ columns have m+1 entries.
     d = max(int(A.getnnz(axis=0).max()) if A.nnz > 0 else 0, m + 1)
-
-    A_B_lu = splu(A[:, B].tocsc())
-    A_N = A[:, N]
 
     # M z = [-Aᵀ z_y + V z_λ]  (x = s = 1)
     def _matvec(z: np.ndarray) -> np.ndarray:
@@ -159,6 +166,28 @@ def _gate_count_qipm2(A: csr_matrix) -> tuple[int, int, float]:
     k = float(svds(M_op, k=1, which="LM", return_singular_vectors=False)[0])
     count = int(gate_count_qlsa(d=d, k=k, epsilon=_EPSILON) * (n - 1) / _EPSILON**2)
     return count, d, k
+
+
+def _gate_count_qipm2(A: csr_matrix) -> tuple[int, int, float]:
+    """Return (gate_count, sparsity, cond) for qipm2.
+
+    Estimates κ(M) for the OSS matrix M = [-Aᵀ | V] ∈ ℝⁿˣⁿ (x = s = 1).
+    V ∈ ℝⁿˣ⁽ⁿ⁻ᵐ⁾ is the null-space basis built from the SPQR pivot basis B:
+        V[B, :] = -A_B⁻¹ A_N,  V[N, :] = I_{n-m}.
+
+    Sparsity d = max(max column nnz of A, m + 1):
+    - z_y columns of M have the same sparsity as columns of A,
+    - z_λ columns have m entries in B-rows (dense A_B⁻¹ A_N column) + 1 in N-rows.
+    """
+    A = csr_matrix(A, dtype=np.float64)
+    m, n = A.shape
+
+    if n <= 1:
+        k = 1.0
+        count = int(gate_count_qlsa(d=1, k=k, epsilon=_EPSILON) * (n - 1) / _EPSILON**2)
+        return count, 1, k
+
+    return _gate_count_qipm2_from_basis(*_preprocess_basis(A))
 
 
 def _load_standard_form(path: Path) -> csr_matrix:
@@ -194,17 +223,47 @@ def _benchmark_instance_from_path(
     data_path = path.parent / (base_name + ".data")
     data = json.loads(data_path.read_text()) if data_path.exists() else {}
 
-    if variant in ("mnes", "both"):
-        count, sparsity, cond = _gate_count_qipm1(A)
-        data["gate_count_qipm1"] = count
-        data["sparsity_qipm1"] = sparsity
-        data["cond_qipm1"] = None if not math.isfinite(cond) else cond
-
-    if variant in ("oss", "both"):
-        count, sparsity, cond = _gate_count_qipm2(A)
-        data["gate_count_qipm2"] = count
-        data["sparsity_qipm2"] = sparsity
-        data["cond_qipm2"] = None if not math.isfinite(cond) else cond
+    if variant == "both":
+        m, n = A.shape
+        if n > 1:
+            try:
+                basis = _preprocess_basis(A)
+                count, sparsity, cond = _gate_count_qipm1_from_basis(*basis)
+                data["gate_count_qipm1"] = count
+                data["sparsity_qipm1"] = sparsity
+                data["cond_qipm1"] = None if not math.isfinite(cond) else cond
+                count, sparsity, cond = _gate_count_qipm2_from_basis(*basis)
+                data["gate_count_qipm2"] = count
+                data["sparsity_qipm2"] = sparsity
+                data["cond_qipm2"] = None if not math.isfinite(cond) else cond
+            except RuntimeError:
+                data["gate_count_qipm1"] = data["sparsity_qipm1"] = data["cond_qipm1"] = None
+                data["gate_count_qipm2"] = data["sparsity_qipm2"] = data["cond_qipm2"] = None
+        else:
+            count, sparsity, cond = _gate_count_qipm1(A)
+            data["gate_count_qipm1"] = count
+            data["sparsity_qipm1"] = sparsity
+            data["cond_qipm1"] = None if not math.isfinite(cond) else cond
+            count, sparsity, cond = _gate_count_qipm2(A)
+            data["gate_count_qipm2"] = count
+            data["sparsity_qipm2"] = sparsity
+            data["cond_qipm2"] = None if not math.isfinite(cond) else cond
+    elif variant == "mnes":
+        try:
+            count, sparsity, cond = _gate_count_qipm1(A)
+            data["gate_count_qipm1"] = count
+            data["sparsity_qipm1"] = sparsity
+            data["cond_qipm1"] = None if not math.isfinite(cond) else cond
+        except RuntimeError:
+            data["gate_count_qipm1"] = data["sparsity_qipm1"] = data["cond_qipm1"] = None
+    else:
+        try:
+            count, sparsity, cond = _gate_count_qipm2(A)
+            data["gate_count_qipm2"] = count
+            data["sparsity_qipm2"] = sparsity
+            data["cond_qipm2"] = None if not math.isfinite(cond) else cond
+        except RuntimeError:
+            data["gate_count_qipm2"] = data["sparsity_qipm2"] = data["cond_qipm2"] = None
 
     data_path.write_text(json.dumps(data, indent=None))
 

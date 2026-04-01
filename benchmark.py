@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark LP instances: A from .std; compute gate counts for qipm1/2 and write to instance .data (JSON)."""
+"""Benchmark LP instances: A from .std; compute cycle counts for mnes/oss and write to instance .data (JSON)."""
 
 from __future__ import annotations
 
@@ -16,9 +16,9 @@ _EPSILON = 1e-1  # precision shared by QLSA and outer Newton-step count
 _PREPROCESS_TIMEOUT = 600  # seconds; basis preprocessing time limit
 
 
-def gate_count_qlsa(
+def cycle_count_qlsa(
     *,
-    d: int,
+    s: int,
     k: float,
     epsilon: float = 1e-1,
 ) -> int:
@@ -26,14 +26,14 @@ def gate_count_qlsa(
     Return the QLSA Chebyshev query count.
 
     Args:
-        d: Maximum sparsity (non-zeros per row or column) of M̂.
+        s: Maximum sparsity (non-zeros per row or column) of M̂.
         k: Condition number (2-norm) of M̂.
         epsilon: Precision (default 1e-1).
 
     Returns:
         int: The number of queries that QLS Chebyshev makes to O_H and O_F (P_A).
     """
-    binst = math.ceil(math.log(d * k / epsilon) * (d * k) ** 2)
+    binst = math.ceil(math.log(s * k / epsilon) * (s * k) ** 2)
     insqrt = binst * math.log(4 * binst / epsilon)
     j0_val = int(math.ceil(math.sqrt(insqrt)))
     return 8 * j0_val
@@ -112,7 +112,7 @@ def _preprocess_basis(A: csr_matrix):
         p.close()
 
 
-def _gate_count_qipm1_from_basis(
+def _cycle_count_mnes_from_basis(
     A: csr_matrix,
     m: int,
     n: int,
@@ -122,10 +122,10 @@ def _gate_count_qipm1_from_basis(
     A_B_lu,
     A_N: csr_matrix,
 ) -> tuple[int, int, float]:
-    """Compute (gate_count, sparsity, cond) for qipm1 from preprocessed basis."""
+    """Compute (cycle_count, sparsity, cond) for mnes from preprocessed basis."""
     from scipy.sparse.linalg import LinearOperator, eigsh
 
-    d = m  # M̂ is generically dense m×m
+    s = m  # M̂ is generically dense m×m
 
     if n_N == 0 or m <= 1:
         k = 1.0
@@ -143,20 +143,20 @@ def _gate_count_qipm1_from_basis(
         M_op = LinearOperator((m, m), matvec=_mhat_mv, dtype=np.float64)
         k = float(eigsh(M_op, k=1, which="LM")[0][0])
 
-    count = int(gate_count_qlsa(d=d, k=k, epsilon=_EPSILON) * (m - 1) / _EPSILON**2)
-    return count, d, k
+    count = int(cycle_count_qlsa(s=s, k=k, epsilon=_EPSILON) * (m - 1) / _EPSILON**2)
+    return count, s, k
 
 
-def _gate_count_qipm1(A: csr_matrix) -> tuple[int, int, float]:
-    """Return (gate_count, sparsity, cond) for qipm1.
+def _cycle_count_mnes(A: csr_matrix) -> tuple[int, int, float]:
+    """Return (cycle_count, sparsity, cond) for mnes.
 
     Estimates κ(M̂) via M̂ = I + F̄F̄ᵀ, F̄ = A_B⁻¹ A_N (D_B = D_N = I).
-    M̂ is m×m and generically dense, so d = m.
+    M̂ is m×m and generically dense, so s = m.
     """
-    return _gate_count_qipm1_from_basis(*_preprocess_basis(A))
+    return _cycle_count_mnes_from_basis(*_preprocess_basis(A))
 
 
-def _gate_count_qipm2_from_basis(
+def _cycle_count_oss_from_basis(
     A: csr_matrix,
     m: int,
     n: int,
@@ -166,20 +166,20 @@ def _gate_count_qipm2_from_basis(
     A_B_lu,
     A_N: csr_matrix,
 ) -> tuple[int, int, float]:
-    """Compute (gate_count, sparsity, cond) for qipm2 from preprocessed basis.
+    """Compute (cycle_count, sparsity, cond) for oss from preprocessed basis.
 
     Estimates κ(M) for the OSS matrix M = [-Aᵀ | V] ∈ ℝⁿˣⁿ (x = s = 1).
     V ∈ ℝⁿˣ⁽ⁿ⁻ᵐ⁾ is the null-space basis built from the SPQR pivot basis B:
         V[B, :] = -A_B⁻¹ A_N,  V[N, :] = I_{n-m}.
 
-    Sparsity d = max(max column nnz of A, m + 1):
+    Sparsity s = max(max column nnz of A, m + 1):
     - z_y columns of M have the same sparsity as columns of A,
     - z_λ columns have m entries in B-rows (dense A_B⁻¹ A_N column) + 1 in N-rows.
     """
     from scipy.sparse.linalg import LinearOperator, svds
 
     # Sparsity: z_y columns mirror A's column nnz; z_λ columns have m+1 entries.
-    d = max(int(A.getnnz(axis=0).max()) if A.nnz > 0 else 0, m + 1)
+    s = max(int(A.getnnz(axis=0).max()) if A.nnz > 0 else 0, m + 1)
 
     # M z = [-Aᵀ z_y + V z_λ]  (x = s = 1)
     def _matvec(z: np.ndarray) -> np.ndarray:
@@ -206,18 +206,18 @@ def _gate_count_qipm2_from_basis(
 
     M_op = LinearOperator((n, n), matvec=_matvec, rmatvec=_rmatvec, dtype=np.float64)
     k = float(svds(M_op, k=1, which="LM", return_singular_vectors=False)[0])
-    count = int(gate_count_qlsa(d=d, k=k, epsilon=_EPSILON) * (n - 1) / _EPSILON**2)
-    return count, d, k
+    count = int(cycle_count_qlsa(s=s, k=k, epsilon=_EPSILON) * (n - 1) / _EPSILON**2)
+    return count, s, k
 
 
-def _gate_count_qipm2(A: csr_matrix) -> tuple[int, int, float]:
-    """Return (gate_count, sparsity, cond) for qipm2.
+def _cycle_count_oss(A: csr_matrix) -> tuple[int, int, float]:
+    """Return (cycle_count, sparsity, cond) for oss.
 
     Estimates κ(M) for the OSS matrix M = [-Aᵀ | V] ∈ ℝⁿˣⁿ (x = s = 1).
     V ∈ ℝⁿˣ⁽ⁿ⁻ᵐ⁾ is the null-space basis built from the SPQR pivot basis B:
         V[B, :] = -A_B⁻¹ A_N,  V[N, :] = I_{n-m}.
 
-    Sparsity d = max(max column nnz of A, m + 1):
+    Sparsity s = max(max column nnz of A, m + 1):
     - z_y columns of M have the same sparsity as columns of A,
     - z_λ columns have m entries in B-rows (dense A_B⁻¹ A_N column) + 1 in N-rows.
     """
@@ -226,10 +226,10 @@ def _gate_count_qipm2(A: csr_matrix) -> tuple[int, int, float]:
 
     if n <= 1:
         k = 1.0
-        count = int(gate_count_qlsa(d=1, k=k, epsilon=_EPSILON) * (n - 1) / _EPSILON**2)
+        count = int(cycle_count_qlsa(s=1, k=k, epsilon=_EPSILON) * (n - 1) / _EPSILON**2)
         return count, 1, k
 
-    return _gate_count_qipm2_from_basis(*_preprocess_basis(A))
+    return _cycle_count_oss_from_basis(*_preprocess_basis(A))
 
 
 def _load_standard_form(path: Path) -> csr_matrix:
@@ -247,7 +247,7 @@ def _benchmark_instance_from_path(
     path: Path,
     variant: str = "both",
 ) -> None:
-    """Load A from .std; compute gate counts, write to instance .data (JSON). path must be .std."""
+    """Load A from .std; compute cycle counts, write to instance .data (JSON). path must be .std."""
     path = path.resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Instance file not found: {path}")
@@ -270,42 +270,42 @@ def _benchmark_instance_from_path(
         if n > 1:
             try:
                 basis = _preprocess_basis(A)
-                count, sparsity, cond = _gate_count_qipm1_from_basis(*basis)
-                data["gate_count_qipm1"] = count
-                data["sparsity_qipm1"] = sparsity
-                data["cond_qipm1"] = None if not math.isfinite(cond) else cond
-                count, sparsity, cond = _gate_count_qipm2_from_basis(*basis)
-                data["gate_count_qipm2"] = count
-                data["sparsity_qipm2"] = sparsity
-                data["cond_qipm2"] = None if not math.isfinite(cond) else cond
+                count, sparsity, cond = _cycle_count_mnes_from_basis(*basis)
+                data["cycle_count_mnes"] = count
+                data["sparsity_mnes"] = sparsity
+                data["cond_mnes"] = None if not math.isfinite(cond) else cond
+                count, sparsity, cond = _cycle_count_oss_from_basis(*basis)
+                data["cycle_count_oss"] = count
+                data["sparsity_oss"] = sparsity
+                data["cond_oss"] = None if not math.isfinite(cond) else cond
             except RuntimeError:
-                data["gate_count_qipm1"] = data["sparsity_qipm1"] = data["cond_qipm1"] = None
-                data["gate_count_qipm2"] = data["sparsity_qipm2"] = data["cond_qipm2"] = None
+                data["cycle_count_mnes"] = data["sparsity_mnes"] = data["cond_mnes"] = None
+                data["cycle_count_oss"] = data["sparsity_oss"] = data["cond_oss"] = None
         else:
-            count, sparsity, cond = _gate_count_qipm1(A)
-            data["gate_count_qipm1"] = count
-            data["sparsity_qipm1"] = sparsity
-            data["cond_qipm1"] = None if not math.isfinite(cond) else cond
-            count, sparsity, cond = _gate_count_qipm2(A)
-            data["gate_count_qipm2"] = count
-            data["sparsity_qipm2"] = sparsity
-            data["cond_qipm2"] = None if not math.isfinite(cond) else cond
+            count, sparsity, cond = _cycle_count_mnes(A)
+            data["cycle_count_mnes"] = count
+            data["sparsity_mnes"] = sparsity
+            data["cond_mnes"] = None if not math.isfinite(cond) else cond
+            count, sparsity, cond = _cycle_count_oss(A)
+            data["cycle_count_oss"] = count
+            data["sparsity_oss"] = sparsity
+            data["cond_oss"] = None if not math.isfinite(cond) else cond
     elif variant == "mnes":
         try:
-            count, sparsity, cond = _gate_count_qipm1(A)
-            data["gate_count_qipm1"] = count
-            data["sparsity_qipm1"] = sparsity
-            data["cond_qipm1"] = None if not math.isfinite(cond) else cond
+            count, sparsity, cond = _cycle_count_mnes(A)
+            data["cycle_count_mnes"] = count
+            data["sparsity_mnes"] = sparsity
+            data["cond_mnes"] = None if not math.isfinite(cond) else cond
         except RuntimeError:
-            data["gate_count_qipm1"] = data["sparsity_qipm1"] = data["cond_qipm1"] = None
+            data["cycle_count_mnes"] = data["sparsity_mnes"] = data["cond_mnes"] = None
     else:
         try:
-            count, sparsity, cond = _gate_count_qipm2(A)
-            data["gate_count_qipm2"] = count
-            data["sparsity_qipm2"] = sparsity
-            data["cond_qipm2"] = None if not math.isfinite(cond) else cond
+            count, sparsity, cond = _cycle_count_oss(A)
+            data["cycle_count_oss"] = count
+            data["sparsity_oss"] = sparsity
+            data["cond_oss"] = None if not math.isfinite(cond) else cond
         except RuntimeError:
-            data["gate_count_qipm2"] = data["sparsity_qipm2"] = data["cond_qipm2"] = None
+            data["cycle_count_oss"] = data["sparsity_oss"] = data["cond_oss"] = None
 
     data_path.write_text(json.dumps(data, indent=None))
 
@@ -316,13 +316,13 @@ def benchmark_instance(
     cache_dir: str | Path | None = None,
     variant: str = "both",
 ) -> None:
-    """Run gate-count benchmark for the instance in cache_dir/instance_class/instance_name/.
+    """Run cycle-count benchmark for the instance in cache_dir/instance_class/instance_name/.
 
-    Discovers the instance by .std (exactly one). Loads A from that file; writes gate counts to instance .data (JSON).
+    Discovers the instance by .std (exactly one). Loads A from that file; writes cycle counts to instance .data (JSON).
     instance_class: e.g. "netlib", "miplib".
     instance_name: subfolder name (instance stem).
     cache_dir: root containing instance-class subfolders; defaults to "cache_dir".
-    variant: 'mnes' (qipm1), 'oss' (qipm2), or 'both' (default).
+    variant: 'mnes', 'oss', or 'both' (default).
     """
     root = Path(cache_dir).resolve() if cache_dir is not None else Path("cache_dir").resolve()
     instance_dir = root / instance_class / instance_name
@@ -341,10 +341,10 @@ def benchmark_instance_class(
     variant: str = "both",
     cache_dir: str | Path | None = None,
 ) -> None:
-    """Run gate-count benchmark for all .std instances in the given instance-class subfolder of cache_dir.
+    """Run cycle-count benchmark for all .std instances in the given instance-class subfolder of cache_dir.
 
     instance_class: name of the subfolder (e.g. "netlib", "miplib").
-    variant: 'mnes' (qipm1), 'oss' (qipm2), or 'both' (default).
+    variant: 'mnes', 'oss', or 'both' (default).
     cache_dir: directory containing instance-class subfolders; defaults to "cache_dir" in the current directory.
     """
     root = Path(cache_dir).resolve() if cache_dir is not None else Path("cache_dir").resolve()
@@ -362,11 +362,11 @@ def benchmark_all_instance_classes(
     variant: str = "both",
     cache_dir: str | Path | None = None,
 ) -> None:
-    """Run gate-count benchmark for .std instances (main entry point).
+    """Run cycle-count benchmark for .std instances (main entry point).
 
     instance_classes: optional list of instance class names (subfolder names under cache_dir).
         If None, all instance classes (all subdirectories of cache_dir) are processed.
-    variant: 'mnes' (qipm1), 'oss' (qipm2), or 'both' (default).
+    variant: 'mnes', 'oss', or 'both' (default).
     cache_dir: directory containing instance-class subfolders; defaults to "cache_dir" in the current directory.
     """
     root = Path(cache_dir).resolve() if cache_dir is not None else Path("cache_dir").resolve()
@@ -381,8 +381,8 @@ def benchmark_all_instance_classes(
 
 
 _BENCHMARK_DATA_KEYS = {
-    "mnes": ("gate_count_qipm1", "sparsity_qipm1", "cond_qipm1"),
-    "oss":  ("gate_count_qipm2", "sparsity_qipm2", "cond_qipm2"),
+    "mnes": ("cycle_count_mnes", "sparsity_mnes", "cond_mnes"),
+    "oss":  ("cycle_count_oss", "sparsity_oss", "cond_oss"),
 }
 
 
@@ -432,7 +432,7 @@ def clear_benchmark_data(
     cache_dir: str | Path | None = None,
     variant: str = "both",
 ) -> None:
-    """Remove benchmark gate-count entries from .data files."""
+    """Remove benchmark cycle-count entries from .data files."""
     root = Path(cache_dir).resolve() if cache_dir is not None else Path("cache_dir").resolve()
     if not root.is_dir():
         raise FileNotFoundError(f"Cache directory not found: {root}")
@@ -457,7 +457,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Benchmark LP instances: compute qipm gate counts and write to instance .data (JSON).",
+        description="Benchmark LP instances: compute qipm cycle counts and write to instance .data (JSON).",
     )
     parser.add_argument(
         "instance_classes",
@@ -474,7 +474,7 @@ if __name__ == "__main__":
         "--qipm",
         choices=["mnes", "oss", "both"],
         default="both",
-        help="Which qipm variant to run: 'mnes' (qipm1), 'oss' (qipm2), or 'both' (default).",
+        help="Which qipm variant to run: 'mnes', 'oss', or 'both' (default).",
     )
     parser.add_argument(
         "--clear",

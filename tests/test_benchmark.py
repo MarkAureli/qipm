@@ -1,7 +1,7 @@
-"""Tests for benchmark: gate counts for qipm1/2/3 on fixture instances (.std).
+"""Tests for benchmark: cycle counts for mnes/oss on fixture instances (.std).
 
-For each test instance (fixture stem with .std) and each qipm method (1, 2, 3),
-runs the gate-count benchmark and asserts the resulting gate count is a positive integer.
+For each test instance (fixture stem with .std) and each variant (mnes, oss),
+runs the cycle-count benchmark and asserts the resulting cycle count is a non-negative integer.
 """
 
 import json
@@ -26,13 +26,13 @@ BENCHMARK_FIXTURE_STEMS = [
     "range_row",
 ]
 
-QIPM_METHODS = [1, 2]
+VARIANTS = ["mnes", "oss"]
 
 
 @pytest.mark.parametrize("stem", BENCHMARK_FIXTURE_STEMS)
-@pytest.mark.parametrize("method", QIPM_METHODS)
-def test_gate_count_positive(stem: str, method: int, tmp_path: Path) -> None:
-    """For each instance and qipm method, gate count is a positive integer."""
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_cycle_count_positive(stem: str, variant: str, tmp_path: Path) -> None:
+    """For each instance and variant, cycle count is a non-negative integer."""
     std_path = FIXTURES / f"{stem}.std"
     if not std_path.is_file():
         pytest.skip(f"Fixture {stem} missing .std in {FIXTURES}")
@@ -47,13 +47,13 @@ def test_gate_count_positive(stem: str, method: int, tmp_path: Path) -> None:
         instance_class,
         stem,
         cache_dir=tmp_path,
-        variant="mnes" if method == 1 else "oss",
+        variant=variant,
     )
 
     data_path = instance_dir / f"{stem}.data"
     assert data_path.is_file(), "benchmark_instance should write .data"
     data = json.loads(data_path.read_text())
-    key = f"gate_count_qipm{method}"
+    key = f"cycle_count_{variant}"
     assert key in data, f"benchmark should write {key}"
     count = data[key]
     assert isinstance(count, int), f"{key} should be an integer"

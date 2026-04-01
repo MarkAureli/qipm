@@ -42,8 +42,8 @@ RUNTIME_KEYS = {
     "highs-mps": "runtime_highs_mps",
 }
 
-# Maps CLI mode names to benchmark data key suffixes
-_VARIANT_SUFFIX = {"mnes": "qipm1", "oss": "qipm2"}
+# Maps variant names to benchmark data key suffixes
+_VARIANT_SUFFIX = {"mnes": "mnes", "oss": "oss"}
 
 _RCPARAMS = {
     "font.family": "serif",
@@ -90,29 +90,29 @@ def _load_advantage_data(
     cache_dir: Path,
     runtime_key: str,
 ) -> dict[str, list[dict]]:
-    """Filter records to those with a valid runtime and at least one gate count."""
+    """Filter records to those with a valid runtime and at least one cycle count."""
     all_records = _iter_records(instance_classes, cache_dir)
     result = {}
     for cls, records in all_records.items():
         filtered = [
             r for r in records
             if r.get(runtime_key)
-            and (r.get("gate_count_qipm1") is not None or r.get("gate_count_qipm2") is not None)
+            and (r.get("cycle_count_mnes") is not None or r.get("cycle_count_oss") is not None)
         ]
         if filtered:
             result[cls] = filtered
     return result
 
 
-def _gate_counts(records: list[dict], variant: str) -> np.ndarray | None:
-    """Extract gate counts for a single variant ('mnes' or 'oss')."""
-    key = "gate_count_" + _VARIANT_SUFFIX[variant]
+def _cycle_counts(records: list[dict], variant: str) -> np.ndarray | None:
+    """Extract cycle counts for a single variant ('mnes' or 'oss')."""
+    key = "cycle_count_" + _VARIANT_SUFFIX[variant]
     vals = [r[key] for r in records if r.get(key) is not None]
     return np.array(vals, dtype=np.float64) if vals else None
 
 
-def _crossover_times(gate_counts: np.ndarray, runtimes: np.ndarray) -> np.ndarray:
-    return runtimes / gate_counts
+def _crossover_times(cycle_counts: np.ndarray, runtimes: np.ndarray) -> np.ndarray:
+    return runtimes / cycle_counts
 
 
 def _advantage_curve(ct: np.ndarray, t_values: np.ndarray) -> np.ndarray:
@@ -130,32 +130,32 @@ def _truncate_at_zero(
 
 def plot_advantage(
     instance_classes: list[str],
-    mode: str,
+    variant: str,
     cache_dir: Path,
     output: Path,
     runtime_key: str = "runtime_glpk",
 ) -> None:
-    """Plot advantage curves. mode: 'mnes', 'oss', or 'both'."""
+    """Plot advantage curves. variant: 'mnes', 'oss', or 'both'."""
     data = _load_advantage_data(instance_classes, cache_dir, runtime_key)
     if not data:
         print("No data found.")
         return
 
-    variants = list(_VARIANT_SUFFIX) if mode == "both" else [mode]
+    variants = list(_VARIANT_SUFFIX) if variant == "both" else [variant]
 
     all_cts: list[np.ndarray] = []
     for cls, records in data.items():
         for variant in variants:
-            gc = _gate_counts(records, variant)
+            gc = _cycle_counts(records, variant)
             if gc is None:
                 continue
-            key = "gate_count_" + _VARIANT_SUFFIX[variant]
+            key = "cycle_count_" + _VARIANT_SUFFIX[variant]
             hrs = np.array([r[runtime_key] for r in records if r.get(key) is not None], dtype=np.float64)
             if len(gc) == len(hrs) and len(gc) > 0:
                 all_cts.append(_crossover_times(gc, hrs))
 
     if not all_cts:
-        print("No valid data for the requested mode.")
+        print("No valid data for the requested variant.")
         return
 
     combined = np.concatenate(all_cts)
@@ -180,7 +180,7 @@ def plot_advantage(
     for i, (cls, records) in enumerate(data.items()):
         color = CLASS_COLORS.get(cls, fallback_colors[i % len(fallback_colors)])
         for variant in variants:
-            key = "gate_count_" + _VARIANT_SUFFIX[variant]
+            key = "cycle_count_" + _VARIANT_SUFFIX[variant]
             pairs = [(r, r[runtime_key]) for r in records if r.get(key) is not None]
             if not pairs:
                 continue
@@ -227,7 +227,7 @@ def plot_advantage(
         fontsize=9,
     )
 
-    if mode == "both":
+    if variant == "both":
         h1 = mlines.Line2D([], [], color="black", linestyle="-",  linewidth=1.8, label="QIPM (MNES)")
         h2 = mlines.Line2D([], [], color="black", linestyle="--", linewidth=1.8, label="QIPM (OSS)")
         ax.legend(handles=[h1, h2], loc="lower left", fontsize=9,
@@ -300,7 +300,7 @@ def plot_difficulty(
     )
 
     ax.set_xscale("log")
-    ax.set_xlabel(r"$s \cdot \kappa$", fontsize=11, labelpad=8)
+    ax.set_xlabel(r"difficulty $\gamma = s \cdot \kappa$", fontsize=11, labelpad=8)
     ax.set_ylabel("number of instances", fontsize=11, labelpad=8)
     ax.set_title(variant.upper(), fontsize=12, pad=10)
     ax.legend(loc="upper left", fontsize=8, framealpha=0.95, edgecolor="#CCCCCC")
@@ -327,7 +327,7 @@ if __name__ == "__main__":
         help="Instance class names (subfolders under cache_dir). If none given, process all.",
     )
     parser.add_argument(
-        "--mode",
+        "--variant",
         choices=["mnes", "oss", "both"],
         default="both",
         help="Which QIPM variant(s) to include (default: both).",
@@ -361,7 +361,7 @@ if __name__ == "__main__":
         classes_tag = "all"
 
     if args.difficulty:
-        variants = list(_VARIANT_SUFFIX) if args.mode == "both" else [args.mode]
+        variants = list(_VARIANT_SUFFIX) if args.variant == "both" else [args.variant]
         for variant in variants:
             plot_difficulty(
                 instance_classes=classes,
@@ -372,8 +372,8 @@ if __name__ == "__main__":
     else:
         plot_advantage(
             instance_classes=classes,
-            mode=args.mode,
+            variant=args.variant,
             cache_dir=cache_dir,
-            output=Path(f"plot_advantage_{classes_tag}_{args.solver}_{args.mode}.pdf"),
+            output=Path(f"plot_advantage_{classes_tag}_{args.solver}_{args.variant}.pdf"),
             runtime_key=RUNTIME_KEYS[args.solver],
         )

@@ -36,8 +36,8 @@ def _solve_mps(path: Path) -> float:
     return elapsed
 
 
-def _solve_std(path: Path) -> tuple[float, np.ndarray, np.ndarray, np.ndarray]:
-    """Load .std standard-form LP, build HiGHS model, run solver. Return (elapsed, x, y, s)."""
+def _solve_std(path: Path) -> float:
+    """Load .std standard-form LP, build HiGHS model, run solver. Return elapsed time in seconds."""
     data = np.load(path)
     c = np.asarray(data["c"], dtype=np.float64).ravel()
     b = np.asarray(data["b"], dtype=np.float64).ravel()
@@ -71,11 +71,7 @@ def _solve_std(path: Path) -> tuple[float, np.ndarray, np.ndarray, np.ndarray]:
         elapsed = time.perf_counter() - t0
         if status != highspy.HighsStatus.kOk and status != highspy.HighsStatus.kWarning:
             raise RuntimeError(f"HiGHS solve failed: {status}")
-    sol = h.getSolution()
-    x = np.asarray(sol.col_value, dtype=np.float64).ravel()
-    y = np.asarray(sol.row_dual, dtype=np.float64).ravel()
-    s = np.asarray(sol.col_dual, dtype=np.float64).ravel()
-    return elapsed, x, y, s
+    return elapsed
 
 
 def _solve_instance_from_path(path: Path) -> None:
@@ -89,10 +85,8 @@ def _solve_instance_from_path(path: Path) -> None:
         elapsed = _solve_mps(path)
         data_key = "runtime_highs_mps"
     elif suffix == ".std":
-        elapsed, x, y, s = _solve_std(path)
+        elapsed = _solve_std(path)
         data_key = "runtime_highs_std"
-        with open(path.with_suffix(".opt"), "wb") as f:
-            np.savez_compressed(f, x=x, y=y, s=s)
     else:
         raise ValueError(f"Unsupported instance format: {suffix}. Use .mps or .std.")
 
@@ -212,9 +206,6 @@ def solve_all_instance_classes(
         solve_instance_class(name, root, formats=formats)
 
 
-_SOLVE_DATA_KEYS = ("runtime_highs_mps", "runtime_highs_std")
-
-
 def show_solve_status(
     instance_classes: list[str] | None = None,
     formats: str = "both",
@@ -224,7 +215,6 @@ def show_solve_status(
 
     For each instance class, prints one line showing counts for the active format(s):
     "<class>  [mps: x/total]  [std: x/total]".
-    An instance counts as done when the corresponding _SOLVE_DATA_KEYS entry is present.
     """
     root = Path(cache_dir).resolve() if cache_dir is not None else Path("cache_dir").resolve()
     if not root.is_dir():
@@ -260,27 +250,6 @@ def show_solve_status(
         print(f"{cls}:  {parts}")
 
 
-def clear_opt_files(
-    instance_classes: list[str] | None = None,
-    cache_dir: str | Path | None = None,
-) -> None:
-    """Delete all .opt files and remove solve-time entries from .data files."""
-    root = Path(cache_dir).resolve() if cache_dir is not None else Path("cache_dir").resolve()
-    if not root.is_dir():
-        raise FileNotFoundError(f"Cache directory not found: {root}")
-
-    search_roots = [root / name for name in instance_classes] if instance_classes else [root]
-
-    for search_root in search_roots:
-        for f in search_root.rglob("*.opt"):
-            f.unlink()
-        for data_path in search_root.rglob("*.data"):
-            data = json.loads(data_path.read_text())
-            if any(k in data for k in _SOLVE_DATA_KEYS):
-                for k in _SOLVE_DATA_KEYS:
-                    data.pop(k, None)
-                data_path.write_text(json.dumps(data, indent=None))
-
 
 if __name__ == "__main__":
     import argparse
@@ -304,11 +273,6 @@ if __name__ == "__main__":
         help="Instance formats to solve: mps, std, or both (default: both).",
     )
     parser.add_argument(
-        "--clear",
-        action="store_true",
-        help="Delete all .opt files instead of solving. Other flags are ignored.",
-    )
-    parser.add_argument(
         "--show",
         action="store_true",
         help="Show how many instances per class have solve-time data for the selected format(s). Other flags are ignored.",
@@ -318,11 +282,6 @@ if __name__ == "__main__":
         show_solve_status(
             instance_classes=args.instance_classes or None,
             formats=args.formats,
-            cache_dir=args.cache_dir,
-        )
-    elif args.clear:
-        clear_opt_files(
-            instance_classes=args.instance_classes or None,
             cache_dir=args.cache_dir,
         )
     else:

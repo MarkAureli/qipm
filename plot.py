@@ -166,7 +166,9 @@ def plot_advantage(
     t_values = np.geomspace(x_min, x_max, N_POINTS)
 
     plt.rcParams.update({
-        "font.family": "sans-serif",
+        "font.family": "serif",
+        "font.serif": ["Computer Modern Roman"],
+        "text.usetex": True,
         "axes.spines.top": False,
         "axes.spines.right": False,
         "axes.grid": True,

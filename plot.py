@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot quantum advantage curves: fraction of instances where quantum total time < classical runtime."""
+"""Plot quantum advantage curves and difficulty (s·κ) histograms from benchmark data."""
 
 from __future__ import annotations
 
@@ -11,10 +11,10 @@ import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
 import matplotlib.patches as mpatches
 
-GATE_SPEED_RECORD = 5e-11  # seconds — update as needed
-N_POINTS = 500             # x-axis resolution
+GATE_SPEED_RECORD = 8e-10  # seconds — update as needed
+N_POINTS = 500
+N_BINS = 30
 
-# Display names and colors per instance class (folder name → label/hex color)
 CLASS_LABELS = {
     "independent_set": "Independent Set",
     "clique":          "Clique",
@@ -42,12 +42,24 @@ RUNTIME_KEYS = {
     "highs-mps": "runtime_highs_mps",
 }
 
+# Maps CLI mode names to benchmark data key suffixes
+_VARIANT_SUFFIX = {"mnes": "qipm1", "oss": "qipm2"}
 
-def load_data(instance_classes: list[str], cache_dir: Path, runtime_key: str) -> dict[str, list[dict]]:
-    """Load .data JSON files for each class. Returns class -> list of data dicts.
+_RCPARAMS = {
+    "font.family": "serif",
+    "font.serif": ["Computer Modern Roman"],
+    "text.usetex": True,
+    "axes.spines.top": False,
+    "axes.spines.right": False,
+}
 
-    Skips instances missing the requested runtime key or both gate counts.
-    """
+
+# ---------------------------------------------------------------------------
+# Shared data loading
+# ---------------------------------------------------------------------------
+
+def _iter_records(instance_classes: list[str], cache_dir: Path) -> dict[str, list[dict]]:
+    """Load all .data JSON files, grouped by class."""
     result: dict[str, list[dict]] = {}
     for cls in instance_classes:
         cls_dir = cache_dir / cls
@@ -61,59 +73,59 @@ def load_data(instance_classes: list[str], cache_dir: Path, runtime_key: str) ->
             if not data_path.exists():
                 continue
             try:
-                data = json.loads(data_path.read_text())
+                records.append(json.loads(data_path.read_text()))
             except (json.JSONDecodeError, OSError):
                 continue
-            rt = data.get(runtime_key)
-            if not rt:  # None or 0
-                continue
-            if data.get("gate_count_qipm1") is None and data.get("gate_count_qipm2") is None:
-                continue
-            records.append(data)
         if records:
             result[cls] = records
     return result
 
 
-def crossover_times(gate_counts: np.ndarray, runtimes: np.ndarray) -> np.ndarray:
-    """Return runtime / gate_count per instance — the gate time at which quantum breaks even."""
+# ---------------------------------------------------------------------------
+# Advantage plot
+# ---------------------------------------------------------------------------
+
+def _load_advantage_data(
+    instance_classes: list[str],
+    cache_dir: Path,
+    runtime_key: str,
+) -> dict[str, list[dict]]:
+    """Filter records to those with a valid runtime and at least one gate count."""
+    all_records = _iter_records(instance_classes, cache_dir)
+    result = {}
+    for cls, records in all_records.items():
+        filtered = [
+            r for r in records
+            if r.get(runtime_key)
+            and (r.get("gate_count_qipm1") is not None or r.get("gate_count_qipm2") is not None)
+        ]
+        if filtered:
+            result[cls] = filtered
+    return result
+
+
+def _gate_counts(records: list[dict], variant: str) -> np.ndarray | None:
+    """Extract gate counts for a single variant ('mnes' or 'oss')."""
+    key = "gate_count_" + _VARIANT_SUFFIX[variant]
+    vals = [r[key] for r in records if r.get(key) is not None]
+    return np.array(vals, dtype=np.float64) if vals else None
+
+
+def _crossover_times(gate_counts: np.ndarray, runtimes: np.ndarray) -> np.ndarray:
     return runtimes / gate_counts
 
 
-def advantage_curve(ct: np.ndarray, t_values: np.ndarray) -> np.ndarray:
-    """For each t in t_values: percentage of instances where t < crossover_time (quantum wins)."""
+def _advantage_curve(ct: np.ndarray, t_values: np.ndarray) -> np.ndarray:
     return np.array([100.0 * np.mean(t < ct) for t in t_values])
 
 
-def compute_x_range(all_crossover_times: np.ndarray) -> tuple[float, float]:
-    """Compute x-axis range so curve spans ~100% -> ~0%; always includes GATE_SPEED_RECORD."""
-    x_min = float(all_crossover_times.min()) / 10
-    x_max = float(all_crossover_times.max()) * 10
-    x_min = min(x_min, GATE_SPEED_RECORD)
-    x_max = max(x_max, GATE_SPEED_RECORD)
-    return x_min, x_max
-
-
-def _extract_gate_counts(records: list[dict], mode: str) -> np.ndarray | None:
-    """Extract gate counts from records for the given mode. Returns None if insufficient data."""
-    if mode == "qipm1":
-        vals = [r["gate_count_qipm1"] for r in records if r.get("gate_count_qipm1") is not None]
-    elif mode == "qipm2":
-        vals = [r["gate_count_qipm2"] for r in records if r.get("gate_count_qipm2") is not None]
-    elif mode == "min":
-        vals = []
-        for r in records:
-            g1 = r.get("gate_count_qipm1")
-            g2 = r.get("gate_count_qipm2")
-            if g1 is not None and g2 is not None:
-                vals.append(min(g1, g2))
-            elif g1 is not None:
-                vals.append(g1)
-            elif g2 is not None:
-                vals.append(g2)
-    else:
-        return None
-    return np.array(vals, dtype=np.float64) if vals else None
+def _truncate_at_zero(
+    t_values: np.ndarray, curve: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    zero_idx = np.argmax(curve == 0.0)
+    if curve[zero_idx] == 0.0:
+        return t_values[: zero_idx + 1], curve[: zero_idx + 1]
+    return t_values, curve
 
 
 def plot_advantage(
@@ -123,54 +135,36 @@ def plot_advantage(
     output: Path,
     runtime_key: str = "runtime_glpk",
 ) -> None:
-    data = load_data(instance_classes, cache_dir, runtime_key)
+    """Plot advantage curves. mode: 'mnes', 'oss', or 'both'."""
+    data = _load_advantage_data(instance_classes, cache_dir, runtime_key)
     if not data:
         print("No data found.")
         return
 
-    # Gather all crossover times to compute x range
+    variants = list(_VARIANT_SUFFIX) if mode == "both" else [mode]
+
     all_cts: list[np.ndarray] = []
     for cls, records in data.items():
-        highs = np.array([r[runtime_key] for r in records], dtype=np.float64)
-        if mode == "compare":
-            for sub in ("qipm1", "qipm2"):
-                gc = _extract_gate_counts(records, sub)
-                if gc is not None and len(gc) == len(highs):
-                    all_cts.append(crossover_times(gc, highs))
-        else:
-            gc = _extract_gate_counts(records, mode)
-            if gc is not None:
-                # align highs to same instances (for min mode, some may be filtered)
-                if mode == "min":
-                    filtered_highs = []
-                    for r in records:
-                        g1 = r.get("gate_count_qipm1")
-                        g2 = r.get("gate_count_qipm2")
-                        if g1 is not None or g2 is not None:
-                            filtered_highs.append(r[runtime_key])
-                    highs_aligned = np.array(filtered_highs, dtype=np.float64)
-                else:
-                    # filter to those with the required gate count
-                    key = "gate_count_" + mode
-                    filtered_highs = [r[runtime_key] for r in records if r.get(key) is not None]
-                    highs_aligned = np.array(filtered_highs, dtype=np.float64)
-                if len(gc) == len(highs_aligned) and len(gc) > 0:
-                    all_cts.append(crossover_times(gc, highs_aligned))
+        for variant in variants:
+            gc = _gate_counts(records, variant)
+            if gc is None:
+                continue
+            key = "gate_count_" + _VARIANT_SUFFIX[variant]
+            hrs = np.array([r[runtime_key] for r in records if r.get(key) is not None], dtype=np.float64)
+            if len(gc) == len(hrs) and len(gc) > 0:
+                all_cts.append(_crossover_times(gc, hrs))
 
     if not all_cts:
         print("No valid data for the requested mode.")
         return
 
     combined = np.concatenate(all_cts)
-    x_min, x_max = compute_x_range(combined)
+    x_min = float(combined.min())
+    x_max = max(float(combined.max()), GATE_SPEED_RECORD) * 10
     t_values = np.geomspace(x_min, x_max, N_POINTS)
 
     plt.rcParams.update({
-        "font.family": "serif",
-        "font.serif": ["Computer Modern Roman"],
-        "text.usetex": True,
-        "axes.spines.top": False,
-        "axes.spines.right": False,
+        **_RCPARAMS,
         "axes.grid": True,
         "grid.color": "#E0E0E0",
         "grid.linewidth": 0.8,
@@ -180,65 +174,41 @@ def plot_advantage(
 
     fig, ax = plt.subplots(figsize=(10, 5))
     fallback_colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
-    single_class = len(data) == 1
+
+    linestyles = {"mnes": "-", "oss": "--"}
 
     for i, (cls, records) in enumerate(data.items()):
         color = CLASS_COLORS.get(cls, fallback_colors[i % len(fallback_colors)])
-
-        if mode == "compare":
-            for sub, ls in (("qipm1", "-"), ("qipm2", "--")):
-                key = "gate_count_" + sub
-                sub_records = [(r, r[runtime_key]) for r in records if r.get(key) is not None]
-                if not sub_records:
-                    continue
-                gc = np.array([r[key] for r, _ in sub_records], dtype=np.float64)
-                hr = np.array([h for _, h in sub_records], dtype=np.float64)
-                ct = crossover_times(gc, hr)
-                curve = advantage_curve(ct, t_values)
-                ax.plot(t_values, curve, color=color, linestyle=ls, linewidth=1.8)
-        else:
-            # Build aligned (gc, highs) pairs
-            if mode == "min":
-                filtered = [(r, r[runtime_key]) for r in records
-                            if r.get("gate_count_qipm1") is not None or r.get("gate_count_qipm2") is not None]
-                gc_list = []
-                for r, _ in filtered:
-                    g1 = r.get("gate_count_qipm1")
-                    g2 = r.get("gate_count_qipm2")
-                    gc_list.append(min(v for v in (g1, g2) if v is not None))
-                gc = np.array(gc_list, dtype=np.float64)
-                hr = np.array([h for _, h in filtered], dtype=np.float64)
-            else:
-                key = "gate_count_" + mode
-                filtered = [(r, r[runtime_key]) for r in records if r.get(key) is not None]
-                gc = np.array([r[key] for r, _ in filtered], dtype=np.float64)
-                hr = np.array([h for _, h in filtered], dtype=np.float64)
-
-            if len(gc) == 0:
+        for variant in variants:
+            key = "gate_count_" + _VARIANT_SUFFIX[variant]
+            pairs = [(r, r[runtime_key]) for r in records if r.get(key) is not None]
+            if not pairs:
                 continue
-            ct = crossover_times(gc, hr)
-            curve = advantage_curve(ct, t_values)
-            ax.plot(t_values, curve, color=color, linewidth=1.8)
+            gc = np.array([r[key] for r, _ in pairs], dtype=np.float64)
+            hr = np.array([h for _, h in pairs], dtype=np.float64)
+            ct = _crossover_times(gc, hr)
+            curve = _advantage_curve(ct, t_values)
+            tv, cv = _truncate_at_zero(t_values, curve)
+            ax.plot(tv, cv, color=color, linestyle=linestyles[variant], linewidth=1.8)
 
-    # Vertical line at record gate speed with rotated annotation
     ax.axvline(GATE_SPEED_RECORD, color="#444444", linestyle=":", linewidth=1.2)
     ax.text(
         GATE_SPEED_RECORD * 0.82, 50,
-        "current speed record\nfor an isolated gate operation",
-        ha="right", va="center", fontsize=7.5, rotation=90, color="#444444",
+        "current speed record for\n an entangling gate operation",
+        ha="right", va="center", fontsize=8.5, rotation=90, color="#444444",
     )
 
     ax.set_xscale("log")
-    ax.set_xlabel("gate execution time (s)", fontsize=11, labelpad=8)
-    ax.set_ylabel("instances with quantum advantage (%)", fontsize=11, labelpad=8)
-    ax.set_ylim(-2, 102)
+    ax.set_xlim(x_min, x_max)
+    ax.set_xlabel("gate execution time ($s$)", fontsize=11, labelpad=8)
+    ax.set_ylabel(r"instances with quantum advantage (\%)", fontsize=11, labelpad=8)
+    ax.set_ylim(0, 102)
     ax.set_yticks([0, 25, 50, 75, 100])
     ax.tick_params(axis="both", labelsize=9.5)
     ax.spines["left"].set_color("#CCCCCC")
     ax.spines["bottom"].set_color("#CCCCCC")
 
-    # Legend above the plot: one color patch per class
-    class_legend_handles = [
+    class_handles = [
         mpatches.Patch(
             facecolor=CLASS_COLORS.get(cls, fallback_colors[i % len(fallback_colors)]),
             edgecolor="none",
@@ -247,18 +217,17 @@ def plot_advantage(
         for i, cls in enumerate(data)
     ]
     fig.legend(
-        handles=class_legend_handles,
+        handles=class_handles,
         loc="upper center",
         bbox_to_anchor=(0.5, 1.0),
-        ncol=min(len(class_legend_handles), 4),
+        ncol=min(len(class_handles), 4),
         frameon=True,
         framealpha=0.95,
         edgecolor="#CCCCCC",
         fontsize=9,
     )
 
-    # Small line-type legend for compare mode (lower left, black lines)
-    if mode == "compare":
+    if mode == "both":
         h1 = mlines.Line2D([], [], color="black", linestyle="-",  linewidth=1.8, label="QIPM (MNES)")
         h2 = mlines.Line2D([], [], color="black", linestyle="--", linewidth=1.8, label="QIPM (OSS)")
         ax.legend(handles=[h1, h2], loc="lower left", fontsize=9,
@@ -267,14 +236,90 @@ def plot_advantage(
     fig.tight_layout()
     fig.subplots_adjust(top=0.78)
     fig.savefig(output, dpi=150)
+    plt.close(fig)
     print(f"Saved to {output}")
 
+
+# ---------------------------------------------------------------------------
+# Difficulty plot
+# ---------------------------------------------------------------------------
+
+def _load_difficulty_data(
+    instance_classes: list[str],
+    cache_dir: Path,
+    variant: str,
+) -> dict[str, np.ndarray]:
+    """Load s·κ products for each class for the given variant ('mnes' or 'oss')."""
+    suffix = _VARIANT_SUFFIX[variant]
+    sparsity_key = f"sparsity_{suffix}"
+    cond_key = f"cond_{suffix}"
+    all_records = _iter_records(instance_classes, cache_dir)
+    result: dict[str, np.ndarray] = {}
+    for cls, records in all_records.items():
+        values = []
+        for r in records:
+            s = r.get(sparsity_key)
+            k = r.get(cond_key)
+            if s is None or k is None:
+                continue
+            values.append(float(s) * float(k))
+        if values:
+            result[cls] = np.array(values, dtype=np.float64)
+    return result
+
+
+def plot_difficulty(
+    instance_classes: list[str],
+    variant: str,
+    cache_dir: Path,
+    output: Path,
+) -> None:
+    """Plot stacked s·κ histogram for one variant ('mnes' or 'oss')."""
+    data = _load_difficulty_data(instance_classes, cache_dir, variant)
+    if not data:
+        print(f"No difficulty data found for {variant}; skipping.")
+        return
+
+    all_values = np.concatenate(list(data.values()))
+    pos = all_values[all_values > 0]
+    bins = np.logspace(np.log10(pos.min()), np.log10(pos.max()), N_BINS + 1)
+
+    plt.rcParams.update(_RCPARAMS)
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+
+    classes_sorted = sorted(data.keys(), key=lambda c: float(np.median(data[c])))
+    ax.hist(
+        [data[cls] for cls in classes_sorted],
+        bins=bins,
+        stacked=True,
+        color=[CLASS_COLORS.get(cls, "#888888") for cls in classes_sorted],
+        label=[CLASS_LABELS.get(cls, cls) for cls in classes_sorted],
+        edgecolor="white",
+        linewidth=0.4,
+    )
+
+    ax.set_xscale("log")
+    ax.set_xlabel(r"$s \cdot \kappa$", fontsize=11, labelpad=8)
+    ax.set_ylabel("number of instances", fontsize=11, labelpad=8)
+    ax.set_title(variant.upper(), fontsize=12, pad=10)
+    ax.legend(loc="upper left", fontsize=8, framealpha=0.95, edgecolor="#CCCCCC")
+
+    fig.tight_layout()
+    fig.savefig(output, dpi=150)
+    plt.close(fig)
+    print(f"Saved to {output}")
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Plot quantum advantage curves from benchmark .data files.",
+        description="Plot quantum advantage curves or difficulty (s·κ) histograms.",
     )
     parser.add_argument(
         "instance_classes",
@@ -283,15 +328,20 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--mode",
-        choices=["qipm1", "qipm2", "compare", "min"],
-        default="compare",
-        help="Which gate count to use for the advantage curve (default: compare).",
+        choices=["mnes", "oss", "both"],
+        default="both",
+        help="Which QIPM variant(s) to include (default: both).",
     )
     parser.add_argument(
         "--solver",
         choices=list(RUNTIME_KEYS),
         default="glpk",
-        help="Classical solver runtime to compare against (default: glpk).",
+        help="Classical solver runtime to compare against (default: glpk). Ignored with --difficulty.",
+    )
+    parser.add_argument(
+        "--difficulty",
+        action="store_true",
+        help="Plot s·κ difficulty histogram instead of advantage curves.",
     )
     parser.add_argument(
         "--cache-dir",
@@ -310,12 +360,20 @@ if __name__ == "__main__":
         classes = [d.name for d in sorted(cache_dir.iterdir()) if d.is_dir()] if cache_dir.is_dir() else []
         classes_tag = "all"
 
-    output = Path(f"plot_{classes_tag}_{args.solver}_{args.mode}.pdf")
-
-    plot_advantage(
-        instance_classes=classes,
-        mode=args.mode,
-        cache_dir=cache_dir,
-        output=output,
-        runtime_key=RUNTIME_KEYS[args.solver],
-    )
+    if args.difficulty:
+        variants = list(_VARIANT_SUFFIX) if args.mode == "both" else [args.mode]
+        for variant in variants:
+            plot_difficulty(
+                instance_classes=classes,
+                variant=variant,
+                cache_dir=cache_dir,
+                output=Path(f"plot_difficulty_{classes_tag}_{variant}.pdf"),
+            )
+    else:
+        plot_advantage(
+            instance_classes=classes,
+            mode=args.mode,
+            cache_dir=cache_dir,
+            output=Path(f"plot_advantage_{classes_tag}_{args.solver}_{args.mode}.pdf"),
+            runtime_key=RUNTIME_KEYS[args.solver],
+        )

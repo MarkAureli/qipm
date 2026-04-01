@@ -108,5 +108,4 @@ pip install -r requirements.txt
 
 ```bash
 python -m pytest tests/
-python -m pytest tests/test_linear_systems.py -v
 ```

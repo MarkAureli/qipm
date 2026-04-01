@@ -23,7 +23,7 @@ A basis $B \subset \{1,\ldots,n\}$ of size $m$ is selected by column-pivoted QR 
 
 $$v \mapsto v + \bar{F}(\bar{F}^\top v) = v + A_B^{-1}\bigl(A_N (A_N^\top (A_B^{-\top} v))\bigr),$$
 
-where solves against $A_B$ use a sparse LU factorisation. Since $\hat{M} \succeq I$, all eigenvalues are $\geq 1$. `eigsh` finds $\lambda_\max$ (largest magnitude) and $\lambda_\min$ (smallest magnitude) separately; when $n - m < m$ the nullspace of $\bar{F}\bar{F}^\top$ guarantees $\lambda_\min = 1$ exactly and the second `eigsh` call is skipped. The condition number is $\kappa(\hat{M}) = \lambda_\max / \lambda_\min$.
+where solves against $A_B$ use a sparse LU factorisation. Since $\lambda_i(\hat{M}) = 1 + \sigma_i(\bar{F})^2$, the condition number reduces to $\kappa(\hat{M}) = (1 + \sigma_\max^2) / (1 + \sigma_\min^2)$. Two `svds` calls on the $\bar{F}$ `LinearOperator` give $\sigma_\max$ (largest) and $\sigma_\min$ (smallest). When $n - m < m$, the rank of $\bar{F}$ is at most $n - m < m$, so $\bar{F}\bar{F}^\top$ has a null space and $\lambda_\min = 1$ exactly — the second `svds` call is skipped. The Ritz bounds from `svds` ensure the result is a lower bound on the true $\kappa(\hat{M})$.
 
 ### OSS — `oss`
 

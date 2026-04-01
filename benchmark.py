@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import math
 import multiprocessing
+import signal
 from pathlib import Path
 
 import numpy as np
@@ -14,6 +15,8 @@ from tqdm import tqdm
 
 _EPSILON = 1e-1  # precision shared by QLSA and outer Newton-step count
 _PREPROCESS_TIMEOUT = 600  # seconds; basis preprocessing time limit
+_MNES_SM_TIMEOUT = 60     # seconds; wall-clock limit for svds("SM") in MNES
+_MNES_N_PROBES = 10_000   # random right-probes for σ_min upper bound fallback
 
 
 def cycle_count_qlsa(
@@ -112,6 +115,49 @@ def _preprocess_basis(A: csr_matrix):
         p.close()
 
 
+class _AlarmTimeout(Exception):
+    pass
+
+
+def _sigma_min_timed(F_op, timeout: int) -> float | None:
+    """Run svds("SM") for σ_min(F̄) with a SIGALRM wall-clock timeout.
+
+    Returns the singular value on convergence, or None on timeout / non-convergence.
+    The SIGALRM fires at the next Python callback (i.e. the next F̄ matvec), so
+    the effective timeout is ±one-matvec accurate.
+    """
+    from scipy.sparse.linalg import ArpackNoConvergence, svds
+
+    def _handler(signum, frame):
+        raise _AlarmTimeout()
+
+    old = signal.signal(signal.SIGALRM, _handler)
+    signal.alarm(timeout)
+    try:
+        return float(svds(F_op, k=1, which="SM", return_singular_vectors=False)[0])
+    except (_AlarmTimeout, ArpackNoConvergence):
+        return None
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
+
+
+def _sigma_min_random_probes(fbar_mv, n_N: int, n_probes: int) -> float:
+    """Upper bound on σ_min(F̄) via random Rayleigh-quotient probes.
+
+    For any unit w ∈ ℝ^{n_N}: σ_min(F̄) ≤ ‖F̄w‖ (min-max theorem).
+    Returns the minimum over n_probes random Gaussian unit vectors — a valid
+    (if potentially loose) upper bound, hence a lower bound on κ(M̂).
+    """
+    rng = np.random.default_rng(0)
+    ub = np.inf
+    for _ in range(n_probes):
+        w = rng.standard_normal(n_N)
+        w /= np.linalg.norm(w)
+        ub = min(ub, float(np.linalg.norm(fbar_mv(w))))
+    return ub
+
+
 def _cycle_count_mnes_from_basis(
     A: csr_matrix,
     m: int,
@@ -122,8 +168,15 @@ def _cycle_count_mnes_from_basis(
     A_B_lu,
     A_N: csr_matrix,
 ) -> tuple[int, int, float]:
-    """Compute (cycle_count, sparsity, cond) for mnes from preprocessed basis."""
-    from scipy.sparse.linalg import LinearOperator, eigsh
+    """Compute (cycle_count, sparsity, cond) for mnes from preprocessed basis.
+
+    Uses M̂ = I + F̄F̄ᵀ, so λᵢ(M̂) = 1 + σᵢ(F̄)². Computes σ_max and σ_min of
+    F̄ = A_B⁻¹ A_N via svds on a LinearOperator; κ = (1+σ_max²)/(1+σ_min²).
+
+    When n_N < m, F̄ has rank ≤ n_N < m, so F̄F̄ᵀ has a null space and λ_min = 1
+    exactly — no second svds call needed.
+    """
+    from scipy.sparse.linalg import LinearOperator, svds
 
     s = m  # M̂ is generically dense m×m
 
@@ -136,12 +189,30 @@ def _cycle_count_mnes_from_basis(
         def _fbar_rmv(u: np.ndarray) -> np.ndarray:
             return np.asarray(A_N.T @ A_B_lu.solve(u, trans="T"), dtype=np.float64).ravel()
 
-        def _mhat_mv(v: np.ndarray) -> np.ndarray:
-            v = np.asarray(v, dtype=np.float64).ravel()
-            return v + _fbar_mv(_fbar_rmv(v))
+        if n_N == 1:
+            # F̄ is m×1; its only singular value is ‖F̄ e₁‖
+            sigma_max = float(np.linalg.norm(_fbar_mv(np.ones(1, dtype=np.float64))))
+            lam_max = 1.0 + sigma_max ** 2
+            lam_min = 1.0  # n_N = 1 < m → null space of F̄F̄ᵀ is non-trivial
+        else:
+            F_op = LinearOperator((m, n_N), matvec=_fbar_mv, rmatvec=_fbar_rmv, dtype=np.float64)
+            sigma_max = float(svds(F_op, k=1, which="LM", return_singular_vectors=False)[0])
+            lam_max = 1.0 + sigma_max ** 2
+            if n_N < m:
+                # F̄ has rank ≤ n_N < m → λ_min(M̂) = 1 exactly
+                lam_min = 1.0
+            else:
+                # Try svds("SM") with a wall-clock timeout; Ritz values from
+                # converged run are upper bounds on σ_min (interlacing theorem),
+                # giving a lower bound on κ.  On timeout or non-convergence fall
+                # back to random Rayleigh-quotient probes, which are cheaper but
+                # potentially looser upper bounds on σ_min.
+                sigma_min = _sigma_min_timed(F_op, _MNES_SM_TIMEOUT)
+                if sigma_min is None:
+                    sigma_min = _sigma_min_random_probes(_fbar_mv, n_N, _MNES_N_PROBES)
+                lam_min = 1.0 + sigma_min ** 2
 
-        M_op = LinearOperator((m, m), matvec=_mhat_mv, dtype=np.float64)
-        k = float(eigsh(M_op, k=1, which="LM")[0][0])
+        k = lam_max / lam_min
 
     count = int(cycle_count_qlsa(s=s, k=k, epsilon=_EPSILON) * (m - 1) / _EPSILON**2)
     return count, s, k
@@ -150,8 +221,8 @@ def _cycle_count_mnes_from_basis(
 def _cycle_count_mnes(A: csr_matrix) -> tuple[int, int, float]:
     """Return (cycle_count, sparsity, cond) for mnes.
 
-    Estimates κ(M̂) via M̂ = I + F̄F̄ᵀ, F̄ = A_B⁻¹ A_N (D_B = D_N = I).
-    M̂ is m×m and generically dense, so s = m.
+    Computes κ(M̂) via M̂ = I + F̄F̄ᵀ, F̄ = A_B⁻¹ A_N (D_B = D_N = I); s = m.
+    Uses svds on F̄: κ = (1+σ_max²)/(1+σ_min²); λ_min = 1 exactly when n_N < m.
     """
     return _cycle_count_mnes_from_basis(*_preprocess_basis(A))
 

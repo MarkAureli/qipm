@@ -31,7 +31,7 @@ Using the same SPQR basis $B$, the null-space basis $V \in \mathbb{R}^{n \times 
 
 $$V_B = -A_B^{-1} A_N, \qquad V_N = I_{n-m}.$$
 
-The system matrix $M = [-A^\top \mid V]$ (evaluated at $x = s = \mathbf{1}$) is wrapped as a `LinearOperator` whose matvec and adjoint-matvec are computed via sparse matrix–vector products and triangular solves against $A_B$. The condition number is $\kappa(M) = \sigma_\max / \sigma_\min$, estimated by two calls to `svds` (largest and smallest singular value). The QLSA sparsity parameter is $s = \max(\text{max col-nnz}(A),\ m+1)$: the first $m$ columns of $M$ inherit the sparsity of $A$, while the remaining $n-m$ columns each have $m$ non-zeros in the $B$-rows (from $A_B^{-1}A_N$) plus one in the $N$-rows.
+The system matrix $M = [-A^\top \mid V]$ (evaluated at $x = s = \mathbf{1}$) is wrapped as a `LinearOperator` whose matvec and adjoint-matvec are computed via sparse matrix–vector products and triangular solves against $A_B$. The condition number is $\kappa(M) = \sigma_\max / \sigma_\min$, estimated by two calls to `svds` (largest and smallest singular value). The QLSA sparsity parameter is $s = \max(\text{max row-nnz}(A),\ m+1)$: the first $m$ columns of $M$ are the columns of $-A^\top$, so column $j$ has as many non-zeros as row $j$ of $A$, while the remaining $n-m$ columns each have $m$ non-zeros in the $B$-rows (from $A_B^{-1}A_N$) plus one in the $N$-rows.
 
 ## Pipeline
 

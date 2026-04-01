@@ -172,14 +172,14 @@ def _cycle_count_oss_from_basis(
     V ∈ ℝⁿˣ⁽ⁿ⁻ᵐ⁾ is the null-space basis built from the SPQR pivot basis B:
         V[B, :] = -A_B⁻¹ A_N,  V[N, :] = I_{n-m}.
 
-    Sparsity s = max(max column nnz of A, m + 1):
-    - z_y columns of M have the same sparsity as columns of A,
+    Sparsity s = max(max row nnz of A, m + 1):
+    - z_y columns of M = columns of -Aᵀ; nnz of column j = nnz of row j of A,
     - z_λ columns have m entries in B-rows (dense A_B⁻¹ A_N column) + 1 in N-rows.
     """
     from scipy.sparse.linalg import LinearOperator, svds
 
-    # Sparsity: z_y columns mirror A's column nnz; z_λ columns have m+1 entries.
-    s = max(int(A.getnnz(axis=0).max()) if A.nnz > 0 else 0, m + 1)
+    # Sparsity: z_y columns mirror A's row nnz (= col nnz of Aᵀ); z_λ columns have m+1 entries.
+    s = max(int(A.getnnz(axis=1).max()) if A.nnz > 0 else 0, m + 1)
 
     # M z = [-Aᵀ z_y + V z_λ]  (x = s = 1)
     def _matvec(z: np.ndarray) -> np.ndarray:
@@ -217,8 +217,8 @@ def _cycle_count_oss(A: csr_matrix) -> tuple[int, int, float]:
     V ∈ ℝⁿˣ⁽ⁿ⁻ᵐ⁾ is the null-space basis built from the SPQR pivot basis B:
         V[B, :] = -A_B⁻¹ A_N,  V[N, :] = I_{n-m}.
 
-    Sparsity s = max(max column nnz of A, m + 1):
-    - z_y columns of M have the same sparsity as columns of A,
+    Sparsity s = max(max row nnz of A, m + 1):
+    - z_y columns of M = columns of -Aᵀ; nnz of column j = nnz of row j of A,
     - z_λ columns have m entries in B-rows (dense A_B⁻¹ A_N column) + 1 in N-rows.
     """
     A = csr_matrix(A, dtype=np.float64)

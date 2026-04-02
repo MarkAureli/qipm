@@ -115,11 +115,11 @@ Solve instances with HiGHS and record solve time:
 
 ```bash
 python solve.py                            # all classes, both formats
-python solve.py --formats std netlib       # .std only, netlib class
-python solve.py --formats mps              # .mps only
+python solve.py --format std netlib       # .std only, netlib class
+python solve.py --format mps              # .mps only
 ```
 
-Each instance is solved in two independent modes, controlled by `--formats`:
+Each instance is solved in two independent modes, controlled by `--format`:
 
 | Format | Input | HiGHS model | Output key |
 |--------|-------|-------------|------------|
@@ -136,18 +136,18 @@ Compute QLSA cycle counts and write to `.data`:
 
 ```bash
 python benchmark.py                        # all classes, both variants
-python benchmark.py --qipm mnes            # MNES only
-python benchmark.py --qipm oss netlib      # OSS, netlib class only
+python benchmark.py --variant mnes            # MNES only
+python benchmark.py --variant oss netlib      # OSS, netlib class only
 python benchmark.py --cache-dir /my/cache
 ```
 
-`--qipm` accepts `mnes`, `oss`, or `both` (default).
+`--variant` accepts `mnes`, `oss`, or `both` (default).
 
 For each instance, the script reads $A$ from the `.std` file and writes three keys per variant into the instance's `.data` JSON: the cycle count (`cycle_count_mnes` / `cycle_count_oss`), the sparsity parameter $s$ (`sparsity_mnes` / `sparsity_oss`), and the condition number $\kappa$ (`cond_mnes` / `cond_oss`).
 
 **Basis preprocessing** — shared by both variants: SPQR (column-pivoted QR on $A$) selects a basis $B$ of size $m$ and identifies the non-basic columns $N$. If $A$ is rank-deficient, a secondary SPQR on $A^\top$ drops redundant rows. A sparse LU factorisation of $A_B$ is then computed once and reused by both variants for all subsequent triangular solves.
 
-**Condition estimation** — see the [Background](#background) section for the matrix definitions. In brief: MNES uses two `eigsh` calls on $\hat{M} = I + \bar{F}\bar{F}^\top$ (wrapped as a `LinearOperator`) to find $\lambda_\max$ and $\lambda_\min$, giving $\kappa = \lambda_\max / \lambda_\min$. OSS uses two `svds` calls on $M = [-A^\top \mid V]$ for $\sigma_\max$ and $\sigma_\min$, giving $\kappa = \sigma_\max / \sigma_\min$.
+**Condition estimation** — see the [Background](#background) section.
 
 **Cycle count formula** — a single QLSA call costs `cycle_count_qlsa(s, κ, ε)` cycles (Chebyshev query count). At least $(d-1)/\varepsilon^2$ measurements, hence that many repetitions of the QLSA, are required in order to obtain an approximate classical solution. The total cycle count is therefore
 

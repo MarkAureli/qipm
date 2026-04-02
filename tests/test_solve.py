@@ -37,7 +37,7 @@ def test_solve_instance_std_completes_and_writes_data(stem: str, tmp_path: Path)
     instance_dir = tmp_path / instance_class / stem
     instance_dir.mkdir(parents=True)
     shutil.copy(std_path, instance_dir / f"{stem}.std")
-    solve_instance(instance_class, stem, cache_dir=tmp_path, formats="std")
+    solve_instance(instance_class, stem, cache_dir=tmp_path, format="std")
 
     data_path = instance_dir / f"{stem}.data"
     assert data_path.is_file(), "solve_instance should write .data for .std"
@@ -57,7 +57,7 @@ def test_solve_instance_mps_completes_and_writes_data(stem: str, tmp_path: Path)
     instance_dir = tmp_path / instance_class / stem
     instance_dir.mkdir(parents=True)
     shutil.copy(mps_path, instance_dir / f"{stem}.mps")
-    solve_instance(instance_class, stem, cache_dir=tmp_path, formats="mps")
+    solve_instance(instance_class, stem, cache_dir=tmp_path, format="mps")
 
     data_path = instance_dir / f"{stem}.data"
     assert data_path.is_file(), "solve_instance should write .data for .mps"

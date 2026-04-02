@@ -15,23 +15,29 @@ Two QIPM variants are benchmarked:
 | `mnes` | Modified Normal Equation System | $\hat{M} = I + \bar{F}\bar{F}^\top$ | $m \times m$ |
 | `oss` | Orthogonal Subspaces System | $M = [-A^\top \mid V]$ | $n \times n$ |
 
-Both condition numbers are estimated matrix-free via ARPACK on a `LinearOperator`, with basis selection via SuiteSparse SPQR.
+A basis $B \subset \{1,\ldots,n\}$ of size $m$ is selected by column-pivoted QR (SPQR) on $A$, giving $A = [A_B \mid A_N]$. A sparse LU factorisation of $A_B$ is computed once and shared by both variants for all triangular solves. Both condition numbers are computed matrix-free via ARPACK on `LinearOperator` objects and are **lower bounds** on the true $\kappa$.
+
+**Lower-bound guarantee.** `svds("LM")` Ritz values underestimate $\sigma_\max$; `svds("SM")` Ritz values overestimate $\sigma_\min$. Their ratio is therefore a lower bound on the true condition number. When `svds("SM")` does not converge within a 60-second wall-clock timeout, $\sigma_\min$ is bounded from above by the minimum of $\|Mw\|$ (or $\|\bar{F}w\|$) over 10k random unit vectors $w$ — valid by the min-max theorem — and the lower bound guarantee is preserved.
 
 ### MNES — `mnes`
 
-A basis $B \subset \{1,\ldots,n\}$ of size $m$ is selected by column-pivoted QR (SPQR) on $A$, giving $A = [A_B \mid A_N]$. The reduced matrix $\bar{F} = A_B^{-1} A_N \in \mathbb{R}^{m \times (n-m)}$ is never formed explicitly. Instead, $\hat{M}$ is wrapped as a `LinearOperator` with matvec
+The reduced matrix $\bar{F} = A_B^{-1} A_N \in \mathbb{R}^{m \times (n-m)}$ is wrapped as a `LinearOperator` (matvec: $v \mapsto A_B^{-1}(A_N v)$). Since $\lambda_i(\hat{M}) = 1 + \sigma_i(\bar{F})^2$:
 
-$$v \mapsto v + \bar{F}(\bar{F}^\top v) = v + A_B^{-1}\bigl(A_N (A_N^\top (A_B^{-\top} v))\bigr),$$
+$$\kappa(\hat{M}) = \frac{1 + \sigma_\max(\bar{F})^2}{1 + \sigma_\min(\bar{F})^2}.$$
 
-where solves against $A_B$ use a sparse LU factorisation. Since $\lambda_i(\hat{M}) = 1 + \sigma_i(\bar{F})^2$, the condition number reduces to $\kappa(\hat{M}) = (1 + \sigma_\max^2) / (1 + \sigma_\min^2)$. Two `svds` calls on the $\bar{F}$ `LinearOperator` give $\sigma_\max$ (largest) and $\sigma_\min$ (smallest). When $n - m < m$, the rank of $\bar{F}$ is at most $n - m < m$, so $\bar{F}\bar{F}^\top$ has a null space and $\lambda_\min = 1$ exactly — the second `svds` call is skipped. The Ritz bounds from `svds` ensure the result is a lower bound on the true $\kappa(\hat{M})$.
+$\sigma_\max$ is computed via `svds("LM")`. When $n - m < m$, the rank of $\bar{F}$ is at most $n - m < m$, so $\bar{F}\bar{F}^\top$ has a null space and $\lambda_\min(\hat{M}) = 1$ exactly — $\sigma_\min$ is set to zero and the second `svds` call is skipped. Otherwise $\sigma_\min$ is found via `svds("SM")` with the timeout/probe fallback described above. The QLSA sparsity parameter is $s = m$ since $\hat{M}$ is generically dense $m \times m$.
 
 ### OSS — `oss`
 
-Using the same SPQR basis $B$, the null-space basis $V \in \mathbb{R}^{n \times (n-m)}$ is defined implicitly by
+The null-space basis $V \in \mathbb{R}^{n \times (n-m)}$ is defined implicitly by
 
-$$V_B = -A_B^{-1} A_N, \qquad V_N = I_{n-m}.$$
+$$V_B = -A_B^{-1} A_N, \qquad V_N = I_{n-m},$$
 
-The system matrix $M = [-A^\top \mid V]$ (evaluated at $x = s = \mathbf{1}$) is wrapped as a `LinearOperator` whose matvec and adjoint-matvec are computed via sparse matrix–vector products and triangular solves against $A_B$. The condition number is $\kappa(M) = \sigma_\max / \sigma_\min$, where $\sigma_\max$ is found via `svds("LM")` and $\sigma_\min$ via `svds("SM")` with a 60-second wall-clock timeout. On timeout or non-convergence, $\sigma_\min$ falls back to a random Rayleigh-quotient probe bound: $\sigma_\min(M) \leq \|Mw\|$ for any unit $w$, so the minimum over 10k random probes is a valid upper bound. Ritz bounds from both calls guarantee $\kappa = \sigma_{\max,\text{ritz}} / \sigma_{\min,\text{ritz}}$ is a lower bound on the true $\kappa(M)$. The QLSA sparsity parameter is $s = \max(\text{max row-nnz}(A),\ m+1)$: the first $m$ columns of $M$ are the columns of $-A^\top$, so column $j$ has as many non-zeros as row $j$ of $A$, while the remaining $n-m$ columns each have $m$ non-zeros in the $B$-rows (from $A_B^{-1}A_N$) plus one in the $N$-rows.
+and $M = [-A^\top \mid V]$ (at $x = s = \mathbf{1}$) is wrapped as a `LinearOperator` whose matvec and adjoint-matvec use sparse matrix–vector products and triangular solves against $A_B$. The condition number is
+
+$$\kappa(M) = \frac{\sigma_\max(M)}{\sigma_\min(M)},$$
+
+with $\sigma_\max$ via `svds("LM")` and $\sigma_\min$ via `svds("SM")` with the timeout/probe fallback. The QLSA sparsity parameter is $s = \max(\text{max row-nnz}(A),\ m+1)$: the first $m$ columns of $M$ are columns of $-A^\top$ (nnz of column $j$ = nnz of row $j$ of $A$), and the remaining $n-m$ columns each have $m$ non-zeros in the $B$-rows plus one in the $N$-rows.
 
 ## Pipeline
 

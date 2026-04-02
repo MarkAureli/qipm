@@ -72,7 +72,7 @@ def _preprocess_basis_worker(queue: multiprocessing.Queue, A: csr_matrix) -> Non
 
 
 def _preprocess_basis(A: csr_matrix):
-    """Shared preprocessing for both qipm variants.
+    """Shared preprocessing for both QIPM variants.
 
     Returns (A, m, n, B, N, n_N, A_B_lu, A_N) after SPQR basis selection,
     optional rank-deficiency row reduction, and LU factorisation of A_B.
@@ -534,7 +534,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Benchmark LP instances: compute qipm cycle counts and write to instance .data (JSON).",
+        description="Benchmark LP instances: compute QIPM cycle counts and write to instance .data (JSON).",
     )
     parser.add_argument(
         "instance_classes",
@@ -548,10 +548,10 @@ if __name__ == "__main__":
         help="Cache directory (default: cache_dir in current directory).",
     )
     parser.add_argument(
-        "--qipm",
+        "--variant",
         choices=["mnes", "oss", "both"],
         default="both",
-        help="Which qipm variant to run: 'mnes', 'oss', or 'both' (default).",
+        help="Which QIPM variant to run: 'mnes', 'oss', or 'both' (default).",
     )
     parser.add_argument(
         "--clear",
@@ -567,18 +567,18 @@ if __name__ == "__main__":
     if args.show:
         show_benchmark_status(
             instance_classes=args.instance_classes or None,
-            variant=args.qipm,
+            variant=args.variant,
             cache_dir=args.cache_dir,
         )
     elif args.clear:
         clear_benchmark_data(
             instance_classes=args.instance_classes or None,
             cache_dir=args.cache_dir,
-            variant=args.qipm,
+            variant=args.variant,
         )
     else:
         benchmark_all_instance_classes(
             instance_classes=args.instance_classes or None,
-            variant=args.qipm,
+            variant=args.variant,
             cache_dir=args.cache_dir,
         )

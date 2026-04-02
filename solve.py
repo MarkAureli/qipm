@@ -124,26 +124,26 @@ def solve_instance(
     instance_class: str,
     instance_name: str,
     cache_dir: str | Path | None = None,
-    formats: str = "both",
+    format: str = "both",
 ) -> None:
     """Solve the instance(s) in cache_dir/instance_class/instance_name/ with HiGHS.
 
-    Discovers .mps and/or .std in that subdirectory according to formats; writes runtime to instance .data.
+    Discovers .mps and/or .std in that subdirectory according to format; writes runtime to instance .data.
     instance_class: e.g. "netlib", "miplib".
     instance_name: subfolder name (instance stem).
     cache_dir: root containing instance-class subfolders; defaults to "cache_dir".
-    formats: "mps" | "std" | "both" — which formats to solve (default "both").
+    format: "mps" | "std" | "both" — which format to solve (default "both").
     """
-    if formats not in ("mps", "std", "both"):
-        raise ValueError(f"formats must be 'mps', 'std', or 'both'; got {formats!r}")
+    if format not in ("mps", "std", "both"):
+        raise ValueError(f"format must be 'mps', 'std', or 'both'; got {format!r}")
 
     root = Path(cache_dir).resolve() if cache_dir is not None else Path("cache_dir").resolve()
     instance_dir = root / instance_class / instance_name
     if not instance_dir.is_dir():
         raise FileNotFoundError(f"Instance directory not found: {instance_dir}")
 
-    mps_paths = sorted(instance_dir.glob("*.mps")) if formats in ("mps", "both") else []
-    std_paths = sorted(instance_dir.glob("*.std")) if formats in ("std", "both") else []
+    mps_paths = sorted(instance_dir.glob("*.mps")) if format in ("mps", "both") else []
+    std_paths = sorted(instance_dir.glob("*.std")) if format in ("std", "both") else []
 
     mps_timed_out = False
     for p in mps_paths:
@@ -151,7 +151,7 @@ def solve_instance(
             tqdm.write(f"timeout: {p.name} (skipping)")
             mps_timed_out = True
 
-    if formats == "both" and mps_timed_out:
+    if format == "both" and mps_timed_out:
         return
 
     for p in std_paths:
@@ -162,16 +162,16 @@ def solve_instance(
 def solve_instance_class(
     instance_class: str,
     cache_dir: str | Path | None = None,
-    formats: str = "both",
+    format: str = "both",
 ) -> None:
     """Solve instances in the given instance-class subfolder of cache_dir.
 
     instance_class: name of the subfolder (e.g. "netlib", "miplib", "clique").
     cache_dir: directory containing instance-class subfolders; defaults to "cache_dir" in the current directory.
-    formats: "mps" | "std" | "both" — which instance formats to solve (default "both").
+    format: "mps" | "std" | "both" — which instance format to solve (default "both").
     """
-    if formats not in ("mps", "std", "both"):
-        raise ValueError(f"formats must be 'mps', 'std', or 'both'; got {formats!r}")
+    if format not in ("mps", "std", "both"):
+        raise ValueError(f"format must be 'mps', 'std', or 'both'; got {format!r}")
 
     root = Path(cache_dir).resolve() if cache_dir is not None else Path("cache_dir").resolve()
     folder = root / instance_class
@@ -180,20 +180,20 @@ def solve_instance_class(
 
     subdirs = sorted(d for d in folder.iterdir() if d.is_dir())
     for subdir in tqdm(subdirs, desc=instance_class, unit="instance"):
-        solve_instance(instance_class, subdir.name, cache_dir=root, formats=formats)
+        solve_instance(instance_class, subdir.name, cache_dir=root, format=format)
 
 
 def solve_all_instance_classes(
     instance_classes: list[str] | None = None,
     cache_dir: str | Path | None = None,
-    formats: str = "both",
+    format: str = "both",
 ) -> None:
     """Solve instances for given or all instance classes (main entry point).
 
     instance_classes: optional list of instance class names (subfolder names under cache_dir).
         If None, all instance classes (all subdirectories of cache_dir) are processed.
     cache_dir: directory containing instance-class subfolders; defaults to "cache_dir" in the current directory.
-    formats: "mps" | "std" | "both" — which instance formats to solve (default "both").
+    format: "mps" | "std" | "both" — which instance format to solve (default "both").
     """
     root = Path(cache_dir).resolve() if cache_dir is not None else Path("cache_dir").resolve()
     if not root.is_dir():
@@ -203,12 +203,12 @@ def solve_all_instance_classes(
         instance_classes = [f.name for f in sorted(root.iterdir()) if f.is_dir()]
 
     for name in instance_classes:
-        solve_instance_class(name, root, formats=formats)
+        solve_instance_class(name, root, format=format)
 
 
 def show_solve_status(
     instance_classes: list[str] | None = None,
-    formats: str = "both",
+    format: str = "both",
     cache_dir: str | Path | None = None,
 ) -> None:
     """Print how many instances per class have valid solve-time entries in their .data files.
@@ -227,7 +227,7 @@ def show_solve_status(
         "mps": "runtime_highs_mps",
         "std": "runtime_highs_std",
     }
-    active_formats = ["mps", "std"] if formats == "both" else [formats]
+    active_formats = ["mps", "std"] if format == "both" else [format]
 
     for cls in instance_classes:
         folder = root / cls
@@ -267,10 +267,10 @@ if __name__ == "__main__":
         help="Cache directory (default: cache_dir in current directory).",
     )
     parser.add_argument(
-        "--formats",
+        "--format",
         choices=("mps", "std", "both"),
         default="both",
-        help="Instance formats to solve: mps, std, or both (default: both).",
+        help="Instance format to solve: mps, std, or both (default: both).",
     )
     parser.add_argument(
         "--show",
@@ -281,12 +281,12 @@ if __name__ == "__main__":
     if args.show:
         show_solve_status(
             instance_classes=args.instance_classes or None,
-            formats=args.formats,
+            format=args.format,
             cache_dir=args.cache_dir,
         )
     else:
         solve_all_instance_classes(
             instance_classes=args.instance_classes or None,
             cache_dir=args.cache_dir,
-            formats=args.formats,
+            format=args.format,
         )

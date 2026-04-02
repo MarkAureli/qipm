@@ -4,40 +4,7 @@ Benchmarks quantum cycle counts for solving linear programs (LPs) of the form
 
 $$\min\ c^\top x \quad \text{s.t.}\ Ax = b,\ x \geq 0$$
 
-via quantum interior-point methods (QIPMs). The key quantity is $\kappa(\hat{M})$, the condition number of the system matrix, which drives the cycle count of the underlying Quantum Linear System Algorithm (QLSA).
-
-## Background
-
-Two QIPM variants are benchmarked:
-
-| Variant | System | Matrix | Size |
-|---------|--------|--------|------|
-| `mnes` | Modified Normal Equation System | $\hat{M} = I + \bar{F}\bar{F}^\top$ | $m \times m$ |
-| `oss` | Orthogonal Subspaces System | $M = [-A^\top \mid V]$ | $n \times n$ |
-
-A basis $B \subset \{1,\ldots,n\}$ of size $m$ is selected by column-pivoted QR (SPQR) on $A$, giving $A = [A_B \mid A_N]$. A sparse LU factorisation of $A_B$ is computed once and shared by both variants for all triangular solves. Both condition numbers are computed matrix-free via ARPACK on `LinearOperator` objects and are **lower bounds** on the true $\kappa$.
-
-**Lower-bound guarantee.** `svds("LM")` Ritz values underestimate $\sigma_\max$; `svds("SM")` Ritz values overestimate $\sigma_\min$. Their ratio is therefore a lower bound on the true condition number. When `svds("SM")` does not converge within a 60-second wall-clock timeout, $\sigma_\min$ is bounded from above by the minimum of $\|Mw\|$ (or $\|\bar{F}w\|$) over 10k random unit vectors $w$ — valid by the min-max theorem — and the lower bound guarantee is preserved.
-
-### MNES — `mnes`
-
-The reduced matrix $\bar{F} = A_B^{-1} A_N \in \mathbb{R}^{m \times (n-m)}$ is wrapped as a `LinearOperator` (matvec: $v \mapsto A_B^{-1}(A_N v)$). Since $\lambda_i(\hat{M}) = 1 + \sigma_i(\bar{F})^2$:
-
-$$\kappa(\hat{M}) = \frac{1 + \sigma_\max(\bar{F})^2}{1 + \sigma_\min(\bar{F})^2}.$$
-
-$\sigma_\max$ is computed via `svds("LM")`. When $n - m < m$, the rank of $\bar{F}$ is at most $n - m < m$, so $\bar{F}\bar{F}^\top$ has a null space and $\lambda_\min(\hat{M}) = 1$ exactly — $\sigma_\min$ is set to zero and the second `svds` call is skipped. Otherwise $\sigma_\min$ is found via `svds("SM")` with the timeout/probe fallback described above. The QLSA sparsity parameter is $s = m$ since $\hat{M}$ is generically dense $m \times m$.
-
-### OSS — `oss`
-
-The null-space basis $V \in \mathbb{R}^{n \times (n-m)}$ is defined implicitly by
-
-$$V_B = -A_B^{-1} A_N, \qquad V_N = I_{n-m},$$
-
-and $M = [-A^\top \mid V]$ (at $x = s = \mathbf{1}$) is wrapped as a `LinearOperator` whose matvec and adjoint-matvec use sparse matrix–vector products and triangular solves against $A_B$. The condition number is
-
-$$\kappa(M) = \frac{\sigma_\max(M)}{\sigma_\min(M)},$$
-
-with $\sigma_\max$ via `svds("LM")` and $\sigma_\min$ via `svds("SM")` with the timeout/probe fallback. The QLSA sparsity parameter is $s = \max(\text{max row-nnz}(A),\ m+1)$: the first $m$ columns of $M$ are columns of $-A^\top$ (nnz of column $j$ = nnz of row $j$ of $A$), and the remaining $n-m$ columns each have $m$ non-zeros in the $B$-rows plus one in the $N$-rows.
+via quantum interior-point methods (QIPMs).
 
 ## Pipeline
 
@@ -143,11 +110,30 @@ python benchmark.py --cache-dir /my/cache
 
 `--variant` accepts `mnes`, `oss`, or `both` (default).
 
+Two QIPM variants are benchmarked:
+
+| Variant | System | Matrix | Size |
+|---------|--------|--------|------|
+| `mnes` | Modified Normal Equation System | $\hat{M} = I + \bar{F}\bar{F}^\top$ | $m \times m$ |
+| `oss` | Orthogonal Subspaces System | $M = [-A^\top \mid V]$ | $n \times n$ |
+
 For each instance, the script reads $A$ from the `.std` file and writes three keys per variant into the instance's `.data` JSON: the cycle count (`cycle_count_mnes` / `cycle_count_oss`), the sparsity parameter $s$ (`sparsity_mnes` / `sparsity_oss`), and the condition number $\kappa$ (`cond_mnes` / `cond_oss`).
 
 **Basis preprocessing** — shared by both variants: SPQR (column-pivoted QR on $A$) selects a basis $B$ of size $m$ and identifies the non-basic columns $N$. If $A$ is rank-deficient, a secondary SPQR on $A^\top$ drops redundant rows. A sparse LU factorisation of $A_B$ is then computed once and reused by both variants for all subsequent triangular solves.
 
-**Condition estimation** — see the [Background](#background) section.
+**Condition estimation** — both condition numbers are computed matrix-free via ARPACK on `LinearOperator` objects and are **lower bounds** on the true $\kappa$. `svds("LM")` Ritz values underestimate $\sigma_\max$; `svds("SM")` Ritz values overestimate $\sigma_\min$; their ratio is therefore a lower bound on the true condition number. When `svds("SM")` does not converge within a 60-second wall-clock timeout, $\sigma_\min$ is upper-bounded by the minimum of $\|Mw\|$ (or $\|\bar{F}w\|$) over 10k random unit vectors $w$ — valid by the min-max theorem — preserving the lower bound guarantee.
+
+#### MNES — `mnes`
+
+The reduced matrix $\bar{F} = A_B^{-1} A_N \in \mathbb{R}^{m \times (n-m)}$ is wrapped as a `LinearOperator` (matvec: $v \mapsto A_B^{-1}(A_N v)$). Since $\lambda_i(\hat{M}) = 1 + \sigma_i(\bar{F})^2$:
+
+$$\kappa(\hat{M}) = \frac{1 + \sigma_\max(\bar{F})^2}{1 + \sigma_\min(\bar{F})^2}.$$
+
+$\sigma_\max$ is computed via `svds("LM")`. When $n - m < m$, the rank of $\bar{F}$ is at most $n - m < m$, so $\bar{F}\bar{F}^\top$ has a null space and $\lambda_\min(\hat{M}) = 1$ exactly — the second `svds` call is skipped. Otherwise $\sigma_\min$ is found via `svds("SM")` with the timeout/probe fallback. The QLSA sparsity parameter is $s = m$ since $\hat{M}$ is generically dense $m \times m$.
+
+#### OSS — `oss`
+
+The null-space basis $V \in \mathbb{R}^{n \times (n-m)}$ is defined implicitly by $V_B = -A_B^{-1} A_N$, $V_N = I_{n-m}$, and $M = [-A^\top \mid V]$ (at $x = s = \mathbf{1}$) is wrapped as a `LinearOperator`. The condition number is $\kappa(M) = \sigma_\max(M) / \sigma_\min(M)$, with $\sigma_\max$ via `svds("LM")` and $\sigma_\min$ via `svds("SM")` with the timeout/probe fallback. The QLSA sparsity parameter is $s = \max(\text{max row-nnz}(A),\ m+1)$: the first $m$ columns of $M$ are columns of $-A^\top$ (nnz of column $j$ = nnz of row $j$ of $A$), and the remaining $n-m$ columns each have $m$ non-zeros in the $B$-rows plus one in the $N$-rows.
 
 **Cycle count formula** — a single QLSA call costs `cycle_count_qlsa(s, κ, ε)` cycles (Chebyshev query count). At least $(d-1)/\varepsilon^2$ measurements, hence that many repetitions of the QLSA, are required in order to obtain an approximate classical solution. The total cycle count is therefore
 

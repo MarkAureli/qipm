@@ -249,14 +249,20 @@ def _cycle_count_oss_from_basis(
     back to random Rayleigh-quotient probes. Ritz bounds from both svds calls
     guarantee κ = σ_max_ritz / σ_min_ritz is a lower bound on the true κ(M).
 
-    Sparsity s = max(max row nnz of A, m + 1):
-    - z_y columns of M = columns of -Aᵀ; nnz of column j = nnz of row j of A,
-    - z_λ columns have m entries in B-rows (dense A_B⁻¹ A_N column) + 1 in N-rows.
+    Sparsity s = max over rows and columns of M:
+    - z_y columns: nnz of column j = nnz of row j of A  → max is max row-nnz(A),
+    - z_λ columns: m entries in B-rows + 1 in N-rows     → max is m + 1,
+    - B-rows: col-nnz_i(A) entries from -Aᵀ + n_N dense entries from V[B,:]
+                                                          → max is max_col-nnz(A_B) + n_N,
+    - N-rows: col-nnz_i(A) + 1                           → dominated by the terms above.
     """
     from scipy.sparse.linalg import LinearOperator, svds
 
-    # Sparsity: z_y columns mirror A's row nnz (= col nnz of Aᵀ); z_λ columns have m+1 entries.
-    s = max(int(A.getnnz(axis=1).max()) if A.nnz > 0 else 0, m + 1)
+    col_nnz = A.getnnz(axis=0)
+    s_zy_cols  = int(A.getnnz(axis=1).max()) if A.nnz > 0 else 0  # z_y columns
+    s_zlam_cols = m + 1                                             # z_λ columns
+    s_B_rows   = (int(col_nnz[B].max()) + n_N) if n_N > 0 and len(B) > 0 else 0  # B-rows
+    s = max(s_zy_cols, s_zlam_cols, s_B_rows)
 
     # M z = [-Aᵀ z_y + V z_λ]  (x = s = 1)
     def _matvec(z: np.ndarray) -> np.ndarray:
@@ -296,7 +302,7 @@ def _cycle_count_oss(A: csr_matrix) -> tuple[int, int, float]:
 
     Computes κ(M) = σ_max/σ_min for M = [-Aᵀ | V] ∈ ℝⁿˣⁿ (x = s = 1).
     Uses svds on M_op with timeout + random probe fallback; result is a lower bound.
-    Sparsity s = max(max row nnz of A, m + 1).
+    Sparsity s = max(max row-nnz(A), m+1, max col-nnz(A_B) + n_N).
     """
     A = csr_matrix(A, dtype=np.float64)
     m, n = A.shape

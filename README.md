@@ -29,7 +29,7 @@ Instance classes: `clique`, `independent_set`, `max_flow`, `miplib`, `misc`, `ne
 Populate `cache_dir` from the simplex-benchmarks repository (requires Git LFS):
 
 ```bash
-python extract.py                          # clone automatically, then clean up
+python extract.py                              # clone automatically, then clean up
 python extract.py /path/to/simplex-benchmarks  # use existing clone
 ```
 
@@ -81,7 +81,7 @@ After conversion, zero rows (ghost equality rows that survive presolve unreferen
 Solve instances with HiGHS and record solve time:
 
 ```bash
-python solve.py                            # all classes, both formats
+python solve.py                           # all classes, both formats
 python solve.py --format std netlib       # .std only, netlib class
 python solve.py --format mps              # .mps only
 ```
@@ -102,7 +102,7 @@ Each solve runs in a subprocess with a 10-minute timeout. In `both` mode, if the
 Compute QLSA cycle counts and write to `.data`:
 
 ```bash
-python benchmark.py                        # all classes, both variants
+python benchmark.py                           # all classes, both variants
 python benchmark.py --variant mnes            # MNES only
 python benchmark.py --variant oss netlib      # OSS, netlib class only
 python benchmark.py --cache-dir /my/cache
@@ -114,8 +114,8 @@ Two QIPM variants are benchmarked:
 
 | Variant | System | Matrix | Size |
 |---------|--------|--------|------|
-| `mnes` | Modified Normal Equation System | $\hat{M} = I + \bar{F}\bar{F}^\top$ | $m \times m$ |
-| `oss` | Orthogonal Subspaces System | $M = [-A^\top \mid V]$ | $n \times n$ |
+| mnes | Modified Normal Equation System | $\hat{M} = I + \bar{F}\bar{F}^\top$ | $m \times m$ |
+| oss | Orthogonal Subspaces System | $M = [-A^\top \mid V]$ | $n \times n$ |
 
 For each instance, the script reads $A$ from the `.std` file and writes three keys per variant into the instance's `.data` JSON: the cycle count (`cycle_count_mnes` / `cycle_count_oss`), the sparsity parameter $s$ (`sparsity_mnes` / `sparsity_oss`), and the condition number $\kappa$ (`cond_mnes` / `cond_oss`).
 
@@ -133,7 +133,11 @@ $\sigma_\max$ is computed via `svds("LM")`. When $n - m < m$, the rank of $\bar{
 
 #### OSS — `oss`
 
-The null-space basis $V \in \mathbb{R}^{n \times (n-m)}$ is defined implicitly by $V_B = -A_B^{-1} A_N$, $V_N = I_{n-m}$, and $M = [-A^\top \mid V]$ (at $x = s = \mathbf{1}$) is wrapped as a `LinearOperator`. The condition number is $\kappa(M) = \sigma_\max(M) / \sigma_\min(M)$, with $\sigma_\max$ via `svds("LM")` and $\sigma_\min$ via `svds("SM")` with the timeout/probe fallback. The QLSA sparsity parameter is $s = \max(\text{max row-nnz}(A),\ m+1)$: the first $m$ columns of $M$ are columns of $-A^\top$ (nnz of column $j$ = nnz of row $j$ of $A$), and the remaining $n-m$ columns each have $m$ non-zeros in the $B$-rows plus one in the $N$-rows.
+The null-space basis $V \in \mathbb{R}^{n \times (n-m)}$ is defined implicitly by $V_B = -A_B^{-1} A_N$, $V_N = I_{n-m}$, and $M = [-A^\top \mid V]$ (at $x = s = \mathbf{1}$) is wrapped as a `LinearOperator`. The condition number is $\kappa(M) = \sigma_\max(M) / \sigma_\min(M)$, with $\sigma_\max$ via `svds("LM")` and $\sigma_\min$ via `svds("SM")` with the timeout/probe fallback. The QLSA sparsity parameter $s$ is the maximum nnz over all rows and columns of $M$:
+
+$$s = \max\!\bigl(\underbrace{\text{max row-nnz}(A)}_{\text{z}_y\text{ columns}},\ \underbrace{m+1}_{\text{z}_\lambda\text{ columns}},\ \underbrace{\max_{i\in B}\text{col-nnz}_i(A)+n_N}_{\text{B-rows}}\bigr).$$
+
+The $\mathrm{z}_y$ columns equal the columns of $-A^\top$ (nnz of column $j$ = nnz of row $j$ of $A$). The $\mathrm{z}_\lambda$ columns each have $m$ nonzeros in the $B$-rows (from the dense $A_B^{-1}A_N$ column) plus one in the $N$-rows. The $B$-rows dominate among rows: each $B$-row $i$ has $\mathrm{col\text{-}nnz}_i(A)$ entries from $-A^\top$ plus $n_N$ dense entries from $V_{B,:} = -A_B^{-1}A_N$; $N$-rows have only one nonzero from $V$ and are dominated by the other terms.
 
 **Cycle count formula** — a single QLSA call costs `cycle_count_qlsa(s, κ, ε)` cycles (Chebyshev query count). At least $(d-1)/\varepsilon^2$ measurements, hence that many repetitions of the QLSA, are required in order to obtain an approximate classical solution. The total cycle count is therefore
 

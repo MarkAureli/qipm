@@ -17,6 +17,8 @@ _EPSILON = 1e-1  # precision shared by QLSA and outer Newton-step count
 _PREPROCESS_TIMEOUT = 600  # seconds; basis preprocessing time limit
 _MNES_SM_TIMEOUT = 60     # seconds; wall-clock limit for svds("SM") in MNES
 _MNES_N_PROBES = 10_000   # random right-probes for σ_min upper bound fallback
+_OSS_SM_TIMEOUT = 60      # seconds; wall-clock limit for svds("SM") in OSS
+_OSS_N_PROBES = 10_000    # random right-probes for σ_min upper bound fallback
 
 
 def cycle_count_qlsa(
@@ -239,9 +241,13 @@ def _cycle_count_oss_from_basis(
 ) -> tuple[int, int, float]:
     """Compute (cycle_count, sparsity, cond) for oss from preprocessed basis.
 
-    Estimates κ(M) for the OSS matrix M = [-Aᵀ | V] ∈ ℝⁿˣⁿ (x = s = 1).
+    Computes κ(M) = σ_max(M) / σ_min(M) for M = [-Aᵀ | V] ∈ ℝⁿˣⁿ (x = s = 1).
     V ∈ ℝⁿˣ⁽ⁿ⁻ᵐ⁾ is the null-space basis built from the SPQR pivot basis B:
         V[B, :] = -A_B⁻¹ A_N,  V[N, :] = I_{n-m}.
+
+    σ_max via svds("LM"); σ_min via svds("SM") with a wall-clock timeout, falling
+    back to random Rayleigh-quotient probes. Ritz bounds from both svds calls
+    guarantee κ = σ_max_ritz / σ_min_ritz is a lower bound on the true κ(M).
 
     Sparsity s = max(max row nnz of A, m + 1):
     - z_y columns of M = columns of -Aᵀ; nnz of column j = nnz of row j of A,
@@ -276,7 +282,11 @@ def _cycle_count_oss_from_basis(
         return out
 
     M_op = LinearOperator((n, n), matvec=_matvec, rmatvec=_rmatvec, dtype=np.float64)
-    k = float(svds(M_op, k=1, which="LM", return_singular_vectors=False)[0])
+    sigma_max = float(svds(M_op, k=1, which="LM", return_singular_vectors=False)[0])
+    sigma_min = _sigma_min_timed(M_op, _OSS_SM_TIMEOUT)
+    if sigma_min is None:
+        sigma_min = _sigma_min_random_probes(M_op.matvec, n, _OSS_N_PROBES)
+    k = sigma_max / sigma_min
     count = int(cycle_count_qlsa(s=s, k=k, epsilon=_EPSILON) * (n - 1) / _EPSILON**2)
     return count, s, k
 
@@ -284,13 +294,9 @@ def _cycle_count_oss_from_basis(
 def _cycle_count_oss(A: csr_matrix) -> tuple[int, int, float]:
     """Return (cycle_count, sparsity, cond) for oss.
 
-    Estimates κ(M) for the OSS matrix M = [-Aᵀ | V] ∈ ℝⁿˣⁿ (x = s = 1).
-    V ∈ ℝⁿˣ⁽ⁿ⁻ᵐ⁾ is the null-space basis built from the SPQR pivot basis B:
-        V[B, :] = -A_B⁻¹ A_N,  V[N, :] = I_{n-m}.
-
-    Sparsity s = max(max row nnz of A, m + 1):
-    - z_y columns of M = columns of -Aᵀ; nnz of column j = nnz of row j of A,
-    - z_λ columns have m entries in B-rows (dense A_B⁻¹ A_N column) + 1 in N-rows.
+    Computes κ(M) = σ_max/σ_min for M = [-Aᵀ | V] ∈ ℝⁿˣⁿ (x = s = 1).
+    Uses svds on M_op with timeout + random probe fallback; result is a lower bound.
+    Sparsity s = max(max row nnz of A, m + 1).
     """
     A = csr_matrix(A, dtype=np.float64)
     m, n = A.shape

@@ -145,11 +145,11 @@ def plot_advantage(
 
     all_cts: list[np.ndarray] = []
     for cls, records in data.items():
-        for variant in variants:
-            gc = _cycle_counts(records, variant)
+        for v in variants:
+            gc = _cycle_counts(records, v)
             if gc is None:
                 continue
-            key = "cycle_count_" + _VARIANT_SUFFIX[variant]
+            key = "cycle_count_" + _VARIANT_SUFFIX[v]
             hrs = np.array([r[runtime_key] for r in records if r.get(key) is not None], dtype=np.float64)
             if len(gc) == len(hrs) and len(gc) > 0:
                 all_cts.append(_crossover_times(gc, hrs))
@@ -159,7 +159,7 @@ def plot_advantage(
         return
 
     combined = np.concatenate(all_cts)
-    x_min = float(combined.min())
+    x_min = max(1e-28, float(combined.min()))
     x_max = max(float(combined.max()), GATE_SPEED_RECORD) * 10
     t_values = np.geomspace(x_min, x_max, N_POINTS)
 
@@ -179,8 +179,8 @@ def plot_advantage(
 
     for i, (cls, records) in enumerate(data.items()):
         color = CLASS_COLORS.get(cls, fallback_colors[i % len(fallback_colors)])
-        for variant in variants:
-            key = "cycle_count_" + _VARIANT_SUFFIX[variant]
+        for v in variants:
+            key = "cycle_count_" + _VARIANT_SUFFIX[v]
             pairs = [(r, r[runtime_key]) for r in records if r.get(key) is not None]
             if not pairs:
                 continue
@@ -189,7 +189,7 @@ def plot_advantage(
             ct = _crossover_times(gc, hr)
             curve = _advantage_curve(ct, t_values)
             tv, cv = _truncate_at_zero(t_values, curve)
-            ax.plot(tv, cv, color=color, linestyle=linestyles[variant], linewidth=1.8)
+            ax.plot(tv, cv, color=color, linestyle=linestyles[v], linewidth=1.8)
 
     ax.axvline(GATE_SPEED_RECORD, color="#444444", linestyle=":", linewidth=1.2)
     ax.text(
@@ -200,7 +200,7 @@ def plot_advantage(
 
     ax.set_xscale("log")
     ax.set_xlim(x_min, x_max)
-    ax.set_xlabel("gate execution time ($s$)", fontsize=11, labelpad=8)
+    ax.set_xlabel("quantum cycle duration ($s$)", fontsize=11, labelpad=8)
     ax.set_ylabel(r"instances with quantum advantage (\%)", fontsize=11, labelpad=8)
     ax.set_ylim(0, 102)
     ax.set_yticks([0, 25, 50, 75, 100])
@@ -214,7 +214,7 @@ def plot_advantage(
             edgecolor="none",
             label=CLASS_LABELS.get(cls, cls),
         )
-        for i, cls in enumerate(data)
+        for i, cls in enumerate(sorted(data.keys(), key=str.lower))
     ]
     fig.legend(
         handles=class_handles,
@@ -273,6 +273,7 @@ def plot_difficulty(
     variant: str,
     cache_dir: Path,
     output: Path,
+    y_max: float | None = None,
 ) -> None:
     """Plot stacked s·κ histogram for one variant ('mnes' or 'oss')."""
     data = _load_difficulty_data(instance_classes, cache_dir, variant)
@@ -286,7 +287,7 @@ def plot_difficulty(
 
     plt.rcParams.update(_RCPARAMS)
 
-    fig, ax = plt.subplots(figsize=(8, 4))
+    fig, ax = plt.subplots(figsize=(6, 4))
 
     classes_sorted = sorted(data.keys(), key=lambda c: float(np.median(data[c])))
     ax.hist(
@@ -299,11 +300,18 @@ def plot_difficulty(
         linewidth=0.4,
     )
 
+    x_max = 1e19 if variant == "mnes" else 1e10
     ax.set_xscale("log")
+    ax.set_xlim(right=x_max)
+    if y_max is not None:
+        ax.set_ylim(top=y_max)
     ax.set_xlabel(r"difficulty $\gamma = s \cdot \kappa$", fontsize=11, labelpad=8)
     ax.set_ylabel("number of instances", fontsize=11, labelpad=8)
     ax.set_title(variant.upper(), fontsize=12, pad=10)
-    ax.legend(loc="upper left", fontsize=8, framealpha=0.95, edgecolor="#CCCCCC")
+    handles, labels = ax.get_legend_handles_labels()
+    sorted_pairs = sorted(zip(labels, handles), key=lambda x: x[0].lower())
+    sorted_labels, sorted_handles = zip(*sorted_pairs) if sorted_pairs else ([], [])
+    ax.legend(sorted_handles, sorted_labels, loc="upper left", fontsize=8, framealpha=0.95, edgecolor="#CCCCCC")
 
     fig.tight_layout()
     fig.savefig(output, dpi=150)
@@ -362,12 +370,30 @@ if __name__ == "__main__":
 
     if args.difficulty:
         variants = list(_VARIANT_SUFFIX) if args.variant == "both" else [args.variant]
+        if len(variants) > 1:
+            peak_counts = []
+            for v in variants:
+                vdata = _load_difficulty_data(classes, cache_dir, v)
+                if not vdata:
+                    continue
+                all_vals = np.concatenate(list(vdata.values()))
+                pos = all_vals[all_vals > 0]
+                bins = np.logspace(np.log10(pos.min()), np.log10(pos.max()), N_BINS + 1)
+                stacked = np.zeros(N_BINS, dtype=np.float64)
+                for cls in sorted(vdata.keys(), key=lambda c: float(np.median(vdata[c]))):
+                    c, _ = np.histogram(vdata[cls], bins=bins)
+                    stacked += c
+                peak_counts.append(int(stacked.max()))
+            y_max: float | None = max(peak_counts) * 1.1 if peak_counts else None
+        else:
+            y_max = None
         for variant in variants:
             plot_difficulty(
                 instance_classes=classes,
                 variant=variant,
                 cache_dir=cache_dir,
                 output=Path(f"plot_difficulty_{classes_tag}_{variant}.pdf"),
+                y_max=y_max,
             )
     else:
         plot_advantage(

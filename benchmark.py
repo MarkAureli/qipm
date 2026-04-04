@@ -293,7 +293,7 @@ def _cycle_count_oss_from_basis(
     if sigma_min is None:
         sigma_min = _sigma_min_random_probes(M_op.matvec, n, _OSS_N_PROBES)
     k = sigma_max / sigma_min
-    count = int(cycle_count_qlsa(s=s, k=k, epsilon=_EPSILON) * (n - 1) / _EPSILON**2)
+    count = int(cycle_count_qlsa(s=s, k=k, epsilon=_EPSILON) * (2 * n - 1) / _EPSILON**2)
     return count, s, k
 
 
@@ -308,9 +308,7 @@ def _cycle_count_oss(A: csr_matrix) -> tuple[int, int, float]:
     m, n = A.shape
 
     if n <= 1:
-        k = 1.0
-        count = int(cycle_count_qlsa(s=1, k=k, epsilon=_EPSILON) * (n - 1) / _EPSILON**2)
-        return count, 1, k
+        return 0, 1, 1.0
 
     return _cycle_count_oss_from_basis(*_preprocess_basis(A))
 

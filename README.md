@@ -141,7 +141,9 @@ The $\mathrm{z}_y$ columns equal the columns of $-A^\top$ (nnz of column $j$ = n
 
 **Cycle count formula** — a single QLSA call costs `cycle_count_qlsa(s, κ, ε)` cycles (Chebyshev query count). At least $(d-1)/\varepsilon^2$ measurements, hence that many repetitions of the QLSA, are required in order to obtain an approximate classical solution. The total cycle count is therefore
 
-$$\text{cycle count} = \texttt{cycle_count_qlsa}(s,\kappa,\varepsilon) \times \frac{\dim - 1}{\varepsilon^2},$$
+$$
+\text{cycle count} = \texttt{cycle\_count\_qlsa}(s,\kappa,\varepsilon) \times \frac{\dim - 1}{\varepsilon^2},
+$$
 
 where $\dim = m$ (MNES) or $\dim = n$ (OSS), and $\varepsilon = 0.1$.
 

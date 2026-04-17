@@ -139,10 +139,10 @@ $$s = \max\!\bigl(\underbrace{\text{max row-nnz}(A)}_{\text{z}_y\text{ columns}}
 
 The $\mathrm{z}_y$ columns equal the columns of $-A^\top$ (nnz of column $j$ = nnz of row $j$ of $A$). The $\mathrm{z}_\lambda$ columns each have $m$ nonzeros in the $B$-rows (from the dense $A_B^{-1}A_N$ column) plus one in the $N$-rows. The $B$-rows dominate among rows: each $B$-row $i$ has $\mathrm{col\text{-}nnz}_i(A)$ entries from $-A^\top$ plus $n_N$ dense entries from $V_{B,:} = -A_B^{-1}A_N$; $N$-rows have only one nonzero from $V$ and are dominated by the other terms.
 
-**Cycle count formula** — a single QLSA call costs `cycle_count_qlsa(s, κ, ε)` cycles (Chebyshev query count). At least $(d-1)/\varepsilon^2$ measurements, hence that many repetitions of the QLSA, are required in order to obtain an approximate classical solution. The total cycle count is therefore
+**Cycle count formula** — a single QLSA call costs $\mathcal{Q}=$`cycle_count_qlsa(s, κ, ε)` cycles (Chebyshev query count). At least $(d-1)/\varepsilon^2$ measurements, hence that many repetitions of the QLSA, are required in order to obtain an approximate classical solution. The total cycle count is therefore
 
 $$
-\text{cycle count} = \operatorname{\texttt{cycle\_count\_qlsa}}(s,\kappa,\varepsilon)\times\frac{\dim-1}{\varepsilon^2}
+\text{cycle count} = \mathcal{Q}\times\frac{\dim-1}{\varepsilon^2}
 $$
 
 where $\dim = m$ (MNES) or $\dim = n$ (OSS), and $\varepsilon = 0.1$.

@@ -1,4 +1,18 @@
-# QIPM
+# Quantum Interior Point Methods (QIPM)
+
+Companion code for the IEEE Quantum Week 2026 submission--[arXiv](https://arxiv.org/abs/2604.24362).
+Please cite this paper as:
+```
+@misc{Binkowski2026PracticalLowerBoundsForHybridQuantumInteriorPointMethodsInLinearProgramming,
+    author          = {Binkowski, Lennart},
+    year            = {2026},
+    title           = {Practical lower bounds for hybrid quantum interior point methods in linear programming},
+    eprint          = {2604.24362},
+    archivePrefix   = {arXiv},
+    primaryClass    = {quant-ph},
+    url             = {https://arxiv.org/abs/2604.24362}
+}
+```
 
 Benchmarks quantum cycle counts for solving linear programs (LPs) of the form
 
